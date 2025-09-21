@@ -9,7 +9,7 @@ COPY package*.json ./
 COPY tsconfig.json ./
 
 # Instalar dependencias (incluyendo devDependencies para build)
-RUN npm ci --include=dev
+RUN npm ci --include=dev --verbose
 
 # Copiar código fuente
 COPY src/ ./src/
@@ -18,7 +18,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Limpiar devDependencies
-RUN npm ci --only=production && npm cache clean --force
+RUN npm prune --production && npm cache clean --force
 
 # Imagen de runtime
 FROM node:20-bookworm-slim AS runtime
