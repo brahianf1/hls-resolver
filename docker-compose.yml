@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  resolver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stream-resolver
+    ports:
+      - "8080:8080"
+    environment:
+      # Configuración del servidor
+      - NODE_ENV=production
+      - PORT=8080
+      - HOST=0.0.0.0
+      
+      # Seguridad (configurar en producción)
+      - API_KEY=${API_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - ALLOWLIST_HOSTS=${ALLOWLIST_HOSTS:-}
+      
+      # Configuración del navegador
+      - PUPPETEER_HEADLESS=true
+      - NAV_TIMEOUT_MS=30000
+      - MAX_WAIT_MS=15000
+      - USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      
+      # Pool de navegadores
+      - MAX_CONCURRENT_PAGES=5
+      - BROWSER_POOL_SIZE=2
+      
+      # Logging
+      - LOG_LEVEL=info
+      
+      # Rate limiting
+      - RATE_LIMIT_MAX=100
+      - RATE_LIMIT_WINDOW_MS=60000
+      
+      # Session
+      - SESSION_SECRET=${SESSION_SECRET:-default-secret-change-in-production}
+    
+    # Límites de recursos
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Configuración de red
+    networks:
+      - resolver-network
+    
+    # Reinicio automático
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Configuración de seguridad
+    security_opt:
+      - no-new-privileges:true
+    
+    # Capabilities mínimas necesarias para Chromium
+    cap_add:
+      - SYS_ADMIN
+    
+    # Shared memory para Chromium
+    shm_size: 2gb
+
+  # Opcional: Nginx como proxy reverso
+  nginx:
+    image: nginx:alpine
+    container_name: stream-resolver-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - resolver
+    networks:
+      - resolver-network
+    restart: unless-stopped
+    profiles:
+      - with-nginx
+
+  # Opcional: Prometheus para métricas
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: stream-resolver-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - resolver
+    networks:
+      - resolver-network
+    restart: unless-stopped
+    profiles:
+      - with-monitoring
+
+  # Opcional: Grafana para visualización
+  grafana:
+    image: grafana/grafana:latest
+    container_name: stream-resolver-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - resolver-network
+    restart: unless-stopped
+    profiles:
+      - with-monitoring
+
+networks:
+  resolver-network:
+    driver: bridge
+    name: stream-resolver-network
+
+volumes:
+  prometheus-data:
+    name: stream-resolver-prometheus-data
+  grafana-data:
+    name: stream-resolver-grafana-data

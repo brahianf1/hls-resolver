@@ -1,0 +1,37 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Stream Resolver metrics
+  - job_name: 'stream-resolver'
+    static_configs:
+      - targets: ['resolver:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+    # Opcional: Basic auth si está configurado
+    # basic_auth:
+    #   username: 'prometheus'
+    #   password: 'your-password'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Configuración de alertas (opcional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           # - alertmanager:9093
+
+# Reglas de alertas básicas (opcional)
+# rule_files:
+#   - "/etc/prometheus/alerts.yml"
