@@ -11,6 +11,24 @@ export async function validateApiKey(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
+
+  // Lista de rutas públicas que no requieren API key
+  const publicRoutes = [
+    '/',
+    '/docs',
+    '/health',
+    '/health/detailed',
+    '/health/readiness',
+    '/health/liveness',
+    '/metrics',
+    '/metrics/json'
+  ];
+
+  // Si la ruta está en la lista pública, permitir acceso sin verificar la key
+  if (publicRoutes.some(route => request.url.startsWith(route))) {
+    return;
+  }
+
   const config = getConfig();
   
   // Si no hay API key configurada, permitir acceso
