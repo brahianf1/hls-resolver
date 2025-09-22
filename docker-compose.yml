@@ -74,24 +74,6 @@ services:
     # Shared memory para Chromium
     shm_size: 2gb
 
-  # Opcional: Nginx como proxy reverso
-  nginx:
-    image: nginx:alpine
-    container_name: stream-resolver-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./docker/ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - resolver
-    networks:
-      - resolver-network
-    restart: unless-stopped
-    profiles:
-      - with-nginx
-
   # Opcional: Prometheus para métricas
   prometheus:
     image: prom/prometheus:latest
