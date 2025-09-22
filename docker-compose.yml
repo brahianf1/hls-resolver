@@ -5,11 +5,10 @@ services:
       dockerfile: Dockerfile
     container_name: stream-resolver
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:${PORT:-8080}"
     environment:
       # Configuración del servidor
       - NODE_ENV=production
-      - PORT=8080
       - HOST=0.0.0.0
       
       # Seguridad (configurar en producción)
@@ -54,14 +53,6 @@ services:
     
     # Reinicio automático
     restart: unless-stopped
-    
-    # Health check
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     
     # Configuración de seguridad
     security_opt:

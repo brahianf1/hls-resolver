@@ -72,21 +72,23 @@ COPY --from=builder --chown=appuser:appuser /app/package*.json ./
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Arg for the port, with a default value
+ARG PORT_ARG=8080
+# Use the build-time argument to set the run-time environment variable
+ENV PORT=$PORT_ARG
+
 # Variables de entorno por defecto
 ENV NODE_ENV=production \
-    PORT=8080 \
     HOST=0.0.0.0 \
     PUPPETEER_HEADLESS=true \
     LOG_LEVEL=info
 
-# Exponer puerto
-EXPOSE 8080
+# Expose the port defined by the environment variable
+EXPOSE $PORT
 
-# Health check
+# Health check using the PORT environment variable
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:8080/health', (res) => { \
-        process.exit(res.statusCode === 200 ? 0 : 1) \
-    }).on('error', () => process.exit(1))"
+    CMD node -e "require('http').get({ host: 'localhost', port: process.env.PORT, path: '/health' }, (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
 
 # Comando por defecto
 CMD ["node", "dist/server/index.js"]

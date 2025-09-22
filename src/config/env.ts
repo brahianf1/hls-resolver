@@ -2,7 +2,7 @@ import { z } from 'zod/v4';
 
 const envSchema = z.object({
   // Server
-  PORT: z.coerce.number().default(8080),
+  PORT: z.coerce.number(),
   HOST: z.string().default('0.0.0.0'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   
