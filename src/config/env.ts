@@ -1,4 +1,6 @@
 import { z } from 'zod/v4';
+import dotenv from 'dotenv';
+import path from 'path';
 
 const envSchema = z.object({
   // Server
@@ -42,6 +44,14 @@ export function loadConfig(): EnvConfig {
   if (config) {
     return config;
   }
+
+  const envFile = process.env.NODE_ENV === 'production' 
+    ? '.env.production' 
+    : '.env.development';
+
+  const envPath = path.resolve(process.cwd(), envFile);
+
+  dotenv.config({ path: envPath });
   
   try {
     config = envSchema.parse(process.env);

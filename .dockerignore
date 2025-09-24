@@ -10,11 +10,7 @@ build/
 coverage/
 
 # Archivos de configuración local
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
 
 # Archivos de IDE
 .vscode/
@@ -44,12 +40,6 @@ docs/
 # Archivos de Git
 .git/
 .gitignore
-
-# Archivos de Docker
-Dockerfile
-docker-compose.yml
-docker-compose.*.yml
-.dockerignore
 
 # Archivos temporales
 tmp/
