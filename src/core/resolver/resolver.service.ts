@@ -176,7 +176,7 @@ export class ResolverService {
 
       // Navegar a la URL
       await browserPage.navigateTo(context.url, {
-        waitUntil: options?.waitUntil || 'domcontentloaded',
+        waitUntil: options?.waitUntil || 'networkidle0',
         timeout: navTimeout,
       });
 
@@ -222,9 +222,6 @@ export class ResolverService {
       { selector: 'video', timeout: 3000 },
       { selector: '[data-hls]', timeout: 2000 },
       { selector: '.video-player', timeout: 2000 },
-      
-      // Esperar por networkidle
-      { networkidle: true, timeout: 5000 },
     ];
 
     const startTime = Date.now();
@@ -247,12 +244,7 @@ export class ResolverService {
           // Esperar un poco más después de encontrar el selector
           await page.waitForTimeout(1000);
           break;
-        } else if (strategy.networkidle) {
-          await page.waitForLoadState('networkidle', { 
-            timeout: strategy.timeout 
-          });
-          getLogger().debug({ sessionId }, 'Network became idle');
-        }
+        } 
       } catch (error) {
         // Continuar con la siguiente estrategia
         getLogger().debug({
