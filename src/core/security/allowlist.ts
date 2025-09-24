@@ -35,10 +35,9 @@ export async function validateAllowlist(
       userAgent: request.headers['user-agent'],
     });
 
-    return reply.status(403).send({
-      error: 'Forbidden',
-      message: `Domain not allowed: ${targetUrl}`
-    });
+    const error = new Error(`Domain not allowed: ${targetUrl}`);
+    (error as any).statusCode = 403;
+    throw error;
   }
 
   getLogger().debug({ requestId: request.id, targetUrl }, 'Domain validated against allowlist');
