@@ -28,13 +28,16 @@ import {
   HeadersManager 
 } from '../../utils/headers.js';
 import axios from 'axios';
+import { IStrategyCache, Strategy } from '../cache/strategy-cache.interface.js';
 
 export class ResolverService {
   private browserPool: BrowserPool;
+  private strategyCache: IStrategyCache;
   private config = getConfig();
 
-  constructor(browserPool: BrowserPool) {
+  constructor(browserPool: BrowserPool, strategyCache: IStrategyCache) {
     this.browserPool = browserPool;
+    this.strategyCache = strategyCache;
   }
 
   /**
@@ -72,7 +75,7 @@ export class ResolverService {
         await detector.setupDetection(browserPage);
 
         // Navegar y detectar streams
-        await this.navigateAndDetect(browserPage, context, detector);
+        const successfulStrategy = await this.navigateAndDetect(browserPage, context, detector);
 
         // Recopilar cookies
         await detector.collectCookies(browserPage.getPage());
@@ -82,6 +85,13 @@ export class ResolverService {
 
         const duration = Date.now() - startTime;
         const hasStreams = result.streams.length > 0;
+
+        // Guardar la estrategia en caché si la detección fue exitosa
+        if (hasStreams) {
+          const domain = new URL(request.url).hostname;
+          const strategyToCache = successfulStrategy || { selector: 'none', timeout: 0 };
+          await this.strategyCache.set(domain, strategyToCache);
+        }
 
         // Métricas y logs
         incrementResolveRequest('success', hasStreams, duration);
@@ -145,7 +155,7 @@ export class ResolverService {
     browserPage: BrowserPage,
     context: DetectionContext,
     detector: HLSDetector
-  ): Promise<void> {
+  ): Promise<Strategy | null> {
     const page = browserPage.getPage();
     const options = context.options;
 
@@ -176,7 +186,7 @@ export class ResolverService {
 
       // Navegar a la URL
       await browserPage.navigateTo(context.url, {
-        waitUntil: options?.waitUntil || 'domcontentloaded',
+        waitUntil: options?.waitUntil || 'networkidle0',
         timeout: navTimeout,
       });
 
@@ -186,13 +196,15 @@ export class ResolverService {
       }, 'Navigation completed, waiting for stream detection');
 
       // Esperar para detectar streams
-      await this.waitForStreamDetection(page, maxWait, context.sessionId);
+      const successfulStrategy = await this.waitForStreamDetection(page, maxWait, context.sessionId, context.url);
 
       // Intentar detectar en iframes si no se encontraron streams
       const candidates = detector.getCandidates();
       if (candidates.length === 0) {
         await this.detectInIframes(page, context.sessionId);
       }
+
+      return successfulStrategy; // Devolver la estrategia exitosa
 
     } catch (error) {
       if (error instanceof Error) {
@@ -215,21 +227,34 @@ export class ResolverService {
   private async waitForStreamDetection(
     page: any,
     maxWaitMs: number,
-    sessionId: string
-  ): Promise<void> {
-    const waitStrategies = [
-      // Esperar por elementos de video
+    sessionId: string,
+    url: string
+  ): Promise<Strategy | null> {
+
+    const domain = new URL(url).hostname;
+
+    const defaultStrategies: Strategy[] = [
       { selector: 'video', timeout: 3000 },
       { selector: '[data-hls]', timeout: 2000 },
       { selector: '.video-player', timeout: 2000 },
-      
-      // Esperar por networkidle
-      { networkidle: true, timeout: 5000 },
     ];
 
+    const cachedStrategy = await this.strategyCache.get(domain);
+
+    // Si la estrategia cacheada es 'none', no esperar
+    if (cachedStrategy && cachedStrategy.selector === 'none') {
+      getLogger().debug({ domain }, 'Skipping wait strategies based on cache.');
+      return null;
+    }
+
+    const strategies = cachedStrategy
+      ? [cachedStrategy, ...defaultStrategies.filter(s => s.selector !== cachedStrategy.selector)]
+      : defaultStrategies;
+
     const startTime = Date.now();
-    
-    for (const strategy of waitStrategies) {
+    let successfulStrategy: Strategy | null = null;
+
+    for (const strategy of strategies) {
       if (Date.now() - startTime >= maxWaitMs) {
         break;
       }
@@ -246,13 +271,10 @@ export class ResolverService {
           
           // Esperar un poco más después de encontrar el selector
           await page.waitForTimeout(1000);
+
+          successfulStrategy = strategy;
           break;
-        } else if (strategy.networkidle) {
-          await page.waitForLoadState('networkidle', { 
-            timeout: strategy.timeout 
-          });
-          getLogger().debug({ sessionId }, 'Network became idle');
-        }
+        } 
       } catch (error) {
         // Continuar con la siguiente estrategia
         getLogger().debug({
@@ -268,6 +290,8 @@ export class ResolverService {
     if (remainingTime > 0) {
       await page.waitForTimeout(Math.min(remainingTime, 3000));
     }
+
+    return successfulStrategy;
   }
 
   /**

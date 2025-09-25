@@ -294,7 +294,7 @@ export class BrowserPage {
   async navigateTo(
     url: string, 
     options?: {
-      waitUntil?: 'domcontentloaded' | 'networkidle2';
+      waitUntil?: 'domcontentloaded' | 'networkidle2' | 'networkidle0';
       timeout?: number;
     }
   ): Promise<void> {
