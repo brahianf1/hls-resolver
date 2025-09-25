@@ -7,6 +7,7 @@ const envSchema = z.object({
   PORT: z.coerce.number(),
   HOST: z.string().default('0.0.0.0'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  STRATEGY_CACHE_TYPE: z.enum(['memory', 'json']).default('memory'),
   
   // Security
   API_KEY: z.string().optional(),

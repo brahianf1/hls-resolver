@@ -14,6 +14,8 @@ import allowlistPlugin from '../core/security/allowlist.js';
 import { resolveRoutes } from './routes/resolve.route.js';
 import { healthRoutes } from './routes/health.route.js';
 import { metricsRoutes } from './routes/metrics.route.js';
+import { IStrategyCache } from '../core/cache/strategy-cache.interface.js';
+import { StrategyCacheFactory } from '../core/cache/strategy-cache.factory.js';
 
 // Cargar configuración
 loadConfig();
@@ -36,6 +38,7 @@ fastify.setSerializerCompiler(serializerCompiler);
 // Variables globales
 let browserPool: BrowserPool;
 let resolverService: ResolverService;
+let strategyCache: IStrategyCache;
 
 /**
  * Configura los plugins de Fastify
@@ -207,6 +210,10 @@ async function setupRoutes(): Promise<void> {
 async function initializeServices(): Promise<void> {
   getLogger().info('Initializing services...');
 
+  // Inicializar cache de estrategias
+  strategyCache = StrategyCacheFactory.createCache();
+  await strategyCache.initialize();
+
   // Inicializar browser pool
   browserPool = new BrowserPool({
     maxConcurrentPages: config.MAX_CONCURRENT_PAGES,
@@ -220,7 +227,7 @@ async function initializeServices(): Promise<void> {
   getLogger().info('Browser pool initialized');
 
   // Inicializar resolver service
-  resolverService = new ResolverService(browserPool);
+  resolverService = new ResolverService(browserPool, strategyCache);
   getLogger().info('Resolver service initialized');
 
   getLogger().info('All services initialized successfully');
