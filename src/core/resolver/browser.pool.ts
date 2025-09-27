@@ -1,4 +1,10 @@
 import puppeteerDefault from 'puppeteer-extra';
+import { PuppeteerBlocker } from '@ghostery/adblocker-puppeteer';
+import fetch from 'cross-fetch';
+import { promises as fs } from 'node:fs';
+// Adblocker opcional (feature flag)
+// npm i -D puppeteer-extra-plugin-adblocker
+import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page, PuppeteerLaunchOptions } from 'puppeteer';
 import pLimit from 'p-limit';
@@ -10,12 +16,22 @@ import {
   incrementBrowserPages,
   incrementNavigationError 
 } from '../observability/metrics.js';
+import { getConfig } from '../../config/env.js';
 
 // HACK: Estandarizar la importación de puppeteer-extra para compatibilidad CJS/ESM
 const puppeteer = (puppeteerDefault as any).default ?? puppeteerDefault;
 
-// Configurar puppeteer con stealth plugin
-puppeteer.use(StealthPlugin());
+export function configurePuppeteer() {
+  // Configurar puppeteer con stealth plugin
+  puppeteer.use(StealthPlugin());
+
+  // Activar adblocker si está habilitado en configuración
+  const _cfg = getConfig?.();
+  if (_cfg?.PUPPETEER_ENABLE_ADBLOCKER === true) {
+    const adblocker = (AdblockerPlugin as any).default ?? AdblockerPlugin;
+    puppeteer.use(adblocker({ blockTrackers: true }));
+  }
+}
 
 const LaunchOptionsZod = z.object({
   headless: z.union([z.boolean(), z.literal('new')]).optional(),
@@ -29,10 +45,26 @@ export class BrowserPool {
   private activePagesCount = 0;
   private options: BrowserPoolOptions;
   private isShuttingDown = false;
+  // Adblocker compartido para todas las páginas del pool
+  private adBlocker?: PuppeteerBlocker;
+  private adBlockerReady?: Promise<void>;
 
   constructor(options: BrowserPoolOptions) {
     this.options = options;
     this.pageLimit = pLimit(options.maxConcurrentPages);
+    // Inicializar el bloqueador con listas precompiladas (ads + tracking), con caché binaria opcional
+    // Debe hacerse una sola vez por proceso para evitar sobrecarga en el arranque
+    try {
+      this.adBlockerReady = PuppeteerBlocker.fromPrebuiltAdsAndTracking(fetch, {
+        path: 'engine.bin',
+        read: fs.readFile,
+        write: fs.writeFile,
+      }).then((blocker) => {
+        this.adBlocker = blocker;
+      });
+    } catch {
+      // Si falla la carga de listas, continuar sin bloquear, para no romper el flujo
+    }
     
     // Manejar señales de cierre
     process.on('SIGTERM', () => this.shutdown());
@@ -146,6 +178,24 @@ export class BrowserPool {
    * Configura una página con las opciones por defecto
    */
   private async configurePage(page: Page): Promise<void> {
+    // Habilitar bloqueo de anuncios ANTES de cualquier navegación
+    try {
+      if (this.adBlocker) {
+        await (this.adBlocker as PuppeteerBlocker).enableBlockingInPage(page);
+      } else if (this.adBlockerReady) {
+        try {
+          await this.adBlockerReady;
+          if (this.adBlocker) {
+            await (this.adBlocker as PuppeteerBlocker).enableBlockingInPage(page);
+          }
+        } catch {
+          // Si falla la inicialización, seguir sin adblocker
+        }
+      }
+    } catch (error) {
+      getLogger().warn({ error }, 'Failed to enable ad blocker, continuing without it');
+    }
+    
     // Configurar user agent
     await page.setUserAgent(this.options.userAgent);
 
@@ -160,17 +210,89 @@ export class BrowserPool {
     page.setDefaultNavigationTimeout(30000);
     page.setDefaultTimeout(15000);
 
-    // Interceptar requests para optimización
+    // Interceptar requests para optimización y bloqueo de anuncios
     await page.setRequestInterception(true);
     
     page.on('request', (request) => {
-      const resourceType = request.resourceType();
-      
-      // Bloquear recursos innecesarios pero permitir media requests
-      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
-        request.abort();
-      } else {
-        request.continue();
+      try {
+        const resourceType = request.resourceType();
+        const url = request.url().toLowerCase();
+        
+        // Lista de dominios de anuncios conocidos
+        const adDomains = [
+          'ads-twitter.com',
+          'imasdk.googleapis.com',
+          'googleads.com',
+          'googlesyndication.com',
+          'doubleclick.net',
+          'ptichoolsougn.net',
+          'campfirecroutondecorator.com',
+          'jilliandescribecompany.com/log',
+          'static.ads-twitter.com',
+          'facebook.com/tr',
+          'analytics.google.com',
+          'googletagmanager.com',
+          'google-analytics.com'
+        ];
+        
+        // Bloquear dominios de anuncios
+        if (adDomains.some(domain => url.includes(domain))) {
+          request.abort().catch(() => {});
+          return;
+        }
+        
+        // Bloquear requests de tracking y analytics
+        if (url.includes('/log_js_error') || 
+            url.includes('/analytics') || 
+            url.includes('/tracking') ||
+            url.includes('/metrics') ||
+            url.includes('/ping') ||
+            url.includes('ima3.js') ||
+            url.includes('vignette.min.js') ||
+            url.includes('uwt.js')) {
+          request.abort().catch(() => {});
+          return;
+        }
+        
+        // Permitir recursos importantes para HLS y streaming
+        if (
+          url.includes('.m3u8') ||
+          url.includes('.ts') ||
+          url.includes('manifest') ||
+          url.includes('playlist') ||
+          url.includes('hls') ||
+          url.includes('orbitcache.com') ||
+          url.includes('urlset') ||
+          resourceType === 'media' ||
+          resourceType === 'xhr' ||
+          resourceType === 'fetch' ||
+          resourceType === 'document' ||
+          resourceType === 'script'
+        ) {
+          // Log HLS/streaming resources
+          if (url.includes('m3u8') || url.includes('hls') || url.includes('orbitcache')) {
+            getLogger().info({ url, resourceType }, 'Allowing potential HLS resource');
+          }
+          request.continue().catch(() => {});
+        }
+        // Bloquear recursos innecesarios 
+        else if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+          // Permitir solo thumbnails importantes
+          if (url.includes('thumb') || url.includes('preview') || url.includes('poster')) {
+            request.continue().catch(() => {});
+          } else {
+            request.abort().catch(() => {});
+          }
+        } else {
+          request.continue().catch(() => {});
+        }
+      } catch (error) {
+        try {
+          getLogger().error({ error }, 'Error in request handler');
+          request.continue().catch(() => {});
+        } catch {
+          // Fallback silencioso
+        }
       }
     });
 
@@ -316,8 +438,7 @@ export class BrowserPage {
    * Espera por un tiempo específico
    */
   async wait(ms: number): Promise<void> {
-    const page = this.getPage();
-    await page.waitForTimeout(ms);
+    await new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**

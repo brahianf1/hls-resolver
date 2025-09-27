@@ -1,126 +1,205 @@
-import type { Page, HTTPResponse, HTTPRequest, Frame } from 'puppeteer';
-import { HLSCandidate, DetectionContext, Cookie } from '../../../types/dto.js';
+import type {
+  Page,
+  HTTPResponse,
+  HTTPRequest,
+  Target,
+  CDPSession,
+  Browser,
+} from 'puppeteer';
+
+import type { Protocol } from 'devtools-protocol';
+
+import {
+  HLSCandidate,
+  DetectionContext,
+  Cookie,
+} from '../../../types/dto.js';
+
 import { getLogger } from '../../observability/logger.js';
 import { BrowserPage } from '../browser.pool.js';
+
+// Forma unificada mínima para responses provenientes de CDP
+type CdpResponse = {
+  url: string;
+  status: number;
+  headers: Record<string, string>;
+};
 
 export class HLSDetector {
   private candidates: Map<string, HLSCandidate> = new Map();
   private context: DetectionContext;
+
   private collectedHeaders: Record<string, string> = {};
   private collectedCookies: Cookie[] = [];
+
+  // referencias para cleanup
+  private browser?: Browser;
+  private page?: Page;
+  private targetCreatedHandler?: (t: Target) => void;
+  private cdpSessions: Set<CDPSession> = new Set();
 
   constructor(context: DetectionContext) {
     this.context = context;
   }
 
   /**
-   * Configura los listeners de detección en una página
+   * Configura los listeners de detección en una página.
+   * - Page.on('response'|'request'|'requestfinished')
+   * - CDP Network por target (principal + nuevos), cubre OOPIF/iframes.
    */
   async setupDetection(browserPage: BrowserPage): Promise<void> {
-    const page = browserPage.getPage();
-    
-    // Listener para responses
-    page.on('response', (response: HTTPResponse) => {
-      this.handleResponse(response);
-    });
+    this.page = browserPage.getPage();
+    this.browser = this.page.browser();
 
-    // Listener para requests
-    page.on('request', (request: HTTPRequest) => {
-      this.handleRequest(request);
-    });
+    // Page-level listeners (rápidos y simples)
+    const onPageResponse = (response: HTTPResponse) => this.handleResponse(response);
+    const onPageRequest = (request: HTTPRequest) => this.handleRequest(request);
+    const onPageRequestFinished = (request: HTTPRequest) => this.handleRequestFinished(request);
 
-    // Listener para request finished (para obtener headers finales)
-    page.on('requestfinished', (request: HTTPRequest) => {
-      this.handleRequestFinished(request);
-    });
+    this.page.on('response', onPageResponse);
+    this.page.on('request', onPageRequest);
+    this.page.on('requestfinished', onPageRequestFinished);
 
-    // Listener para frames (iframes)
-    page.on('frameattached', (frame: Frame) => {
-      this.setupFrameDetection(frame);
-    });
+    // CDP por target para cubrir OOPIF/iframes
+    const setupCDPForTarget = async (target: Target) => {
+      try {
+        const session: CDPSession = await target.createCDPSession();
+        this.cdpSessions.add(session);
 
-    getLogger().debug({ sessionId: this.context.sessionId }, 'HLS detection listeners configured');
+        await session.send('Network.enable');
+
+        session.on(
+          'Network.responseReceived',
+          (evt: Protocol.Network.ResponseReceivedEvent) => {
+            const hdrs = this.normalizeHeaders(evt.response.headers || {});
+            const url  = evt.response.url || '';
+            const type = String(evt.type || '');
+            // Traza del recurso (XHR/Fetch/Media suelen ser señales más “limpias” de HLS)
+            if (this.isHlsManifest(url, hdrs['content-type'] || '')) {
+              try { getLogger().debug({ sessionId: this.context.sessionId, type, url }, 'HLS CDP candidate'); } catch {}
+            }
+            const cdpRes: CdpResponse = { url, status: evt.response.status, headers: hdrs };
+            this.handleResponse(cdpRes);
+          },
+        );
+
+        getLogger().debug(
+          {
+            sessionId: this.context.sessionId,
+            targetType: target.type(),
+            targetUrl: target.url(),
+          },
+          'CDP Network listener attached',
+        );
+      } catch (error) {
+        getLogger().error(
+          { error, sessionId: this.context.sessionId },
+          'Failed to attach CDP listener',
+        );
+      }
+    };
+
+    // Target principal
+    await setupCDPForTarget(this.page.target());
+
+    // Futuros targets
+    this.targetCreatedHandler = async (t: Target) => {
+      try {
+        // Opcional: filtrar por browserContext si se desea estricta asociación
+        await setupCDPForTarget(t);
+      } catch (error) {
+        try {
+          getLogger().error(
+            { error, sessionId: this.context.sessionId },
+            'Error in targetCreatedHandler'
+          );
+        } catch {}
+      }
+    };
+    this.browser.on('targetcreated', this.targetCreatedHandler);
+
+    getLogger().debug(
+      { sessionId: this.context.sessionId },
+      'HLS detection listeners configured (Page + CDP)',
+    );
   }
 
   /**
-   * Maneja responses HTTP para detectar streams HLS
+   * Maneja responses HTTP/CDP y detecta manifiestos HLS.
    */
-  private handleResponse(response: HTTPResponse): void {
+  private handleResponse(response: HTTPResponse | CdpResponse): void {
     try {
-      const url = response.url();
-      const contentType = response.headers()['content-type'] || '';
-      const status = response.status();
+      const isPptr = typeof (response as HTTPResponse).url === 'function';
 
-      // Verificar si es un candidato HLS válido
-      if (this.isHLSCandidate(url, contentType) && status >= 200 && status < 400) {
-        this.addCandidate({
-          url,
-          contentType,
-          headers: this.extractRelevantHeaders(response.request().headers()),
-          cookies: [], // Se llenarán después
-          detectedAt: Date.now(),
-          source: 'response',
-        });
+      const url: string = isPptr
+        ? (response as HTTPResponse).url()
+        : (response as CdpResponse).url;
 
-        getLogger().debug({
+      const status: number = isPptr
+        ? (response as HTTPResponse).status()
+        : (response as CdpResponse).status;
+
+      const headersObj: Record<string, any> = isPptr
+        ? (response as HTTPResponse).headers()
+        : (response as CdpResponse).headers;
+
+      const headers = this.normalizeHeaders(headersObj || {});
+      const contentType = headers['content-type'] || '';
+      const isHLS = this.isHlsManifest(url, contentType);
+
+      // Solo log responses HLS o potencialmente importantes
+      if (isHLS || url.toLowerCase().includes('m3u8') || url.toLowerCase().includes('hls')) {
+        getLogger().info({
           sessionId: this.context.sessionId,
           url,
-          contentType,
           status,
-        }, 'HLS candidate detected from response');
+          contentType,
+          isHLS
+        }, 'Potential HLS Response detected');
       }
 
-      // Recopilar headers importantes para reproducción
-      this.collectHeaders(response.request().headers());
-      
+      if (isHLS && status >= 200 && status < 400) {
+        this.addCandidate(url, contentType);
+      }
     } catch (error) {
-      getLogger().error({ 
-        error, 
-        sessionId: this.context.sessionId,
-        url: response.url() 
-      }, 'Error handling response in HLS detector');
+      const safeUrl =
+        typeof (response as HTTPResponse).url === 'function'
+          ? (response as HTTPResponse).url()
+          : (response as CdpResponse).url;
+      getLogger().error(
+        { error, sessionId: this.context.sessionId, url: safeUrl },
+        'Error handling response in HLS detector',
+      );
     }
   }
 
   /**
-   * Maneja requests HTTP para detectar patrones HLS
+   * Maneja requests HTTP para detectar candidatos HLS y capturar headers relevantes.
    */
   private handleRequest(request: HTTPRequest): void {
     try {
       const url = request.url();
-      const headers = request.headers();
+      const headers = this.normalizeHeaders(request.headers() || {});
 
-      // Detectar requests a archivos .m3u8
       if (this.isHLSCandidate(url)) {
-        this.addCandidate({
-          url,
-          contentType: headers['content-type'],
-          headers: this.extractRelevantHeaders(headers),
-          cookies: [], // Se llenarán después
-          detectedAt: Date.now(),
-          source: 'request',
-        });
-
-        getLogger().debug({
-          sessionId: this.context.sessionId,
-          url,
-          method: request.method(),
-        }, 'HLS candidate detected from request');
+        this.addCandidate(url, headers['content-type'] || '');
+        getLogger().debug(
+          { sessionId: this.context.sessionId, url, method: request.method() },
+          'HLS candidate from request',
+        );
       }
 
-      // Recopilar headers importantes
       this.collectHeaders(headers);
-      
     } catch (error) {
-      getLogger().error({ 
-        error, 
-        sessionId: this.context.sessionId 
-      }, 'Error handling request in HLS detector');
+      getLogger().error(
+        { error, sessionId: this.context.sessionId },
+        'Error handling request in HLS detector',
+      );
     }
   }
 
   /**
-   * Maneja requests finalizados para obtener información completa
+   * En requestfinished, completa metadata del candidato con headers de respuesta.
    */
   private handleRequestFinished(request: HTTPRequest): void {
     try {
@@ -128,69 +207,35 @@ export class HLSDetector {
       if (!response) return;
 
       const url = request.url();
-      
-      // Si ya tenemos este candidato, actualizamos con información del response
-      if (this.candidates.has(url)) {
-        const candidate = this.candidates.get(url)!;
-        const responseHeaders = response.headers();
-        
-        // Actualizar content-type si no lo teníamos
-        if (!candidate.contentType && responseHeaders['content-type']) {
-          candidate.contentType = responseHeaders['content-type'];
-        }
+      if (!this.candidates.has(url)) return;
 
-        // Merge headers
-        candidate.headers = {
-          ...candidate.headers,
-          ...this.extractRelevantHeaders(responseHeaders),
-        };
+      const candidate = this.candidates.get(url)!;
+      const responseHeaders = this.normalizeHeaders(response.headers() || {});
 
-        this.candidates.set(url, candidate);
+      if (!candidate.contentType && responseHeaders['content-type']) {
+        candidate.contentType = responseHeaders['content-type'];
       }
-      
+      candidate.headers = {
+        ...candidate.headers,
+        ...this.extractRelevantHeaders(responseHeaders),
+      };
+
+      this.candidates.set(url, candidate);
     } catch (error) {
-      getLogger().error({ 
-        error, 
-        sessionId: this.context.sessionId 
-      }, 'Error handling finished request in HLS detector');
+      getLogger().error(
+        { error, sessionId: this.context.sessionId },
+        'Error handling finished request in HLS detector',
+      );
     }
   }
 
   /**
-   * Configura detección en frames (iframes)
-   */
-  private setupFrameDetection(frame: Frame): void {
-    try {
-      // Configurar listeners para el frame
-      frame.on('response', (response) => {
-        this.handleResponse(response as HTTPResponse);
-      });
-
-      frame.on('request', (request) => {
-        this.handleRequest(request as HTTPRequest);
-      });
-
-      getLogger().debug({
-        sessionId: this.context.sessionId,
-        frameUrl: frame.url(),
-      }, 'Frame detection configured');
-      
-    } catch (error) {
-      getLogger().error({ 
-        error, 
-        sessionId: this.context.sessionId 
-      }, 'Error setting up frame detection');
-    }
-  }
-
-  /**
-   * Recopila cookies de la página actual
+   * Recopila cookies actuales y las asocia a todos los candidatos.
    */
   async collectCookies(page: Page): Promise<void> {
     try {
       const cookies = await page.cookies();
-      
-      this.collectedCookies = cookies.map(cookie => ({
+      this.collectedCookies = cookies.map((cookie) => ({
         name: cookie.name,
         value: cookie.value,
         domain: cookie.domain,
@@ -200,50 +245,98 @@ export class HLSDetector {
         secure: cookie.secure,
       }));
 
-      // Actualizar candidatos con cookies
       for (const candidate of this.candidates.values()) {
         candidate.cookies = this.collectedCookies;
       }
 
-      getLogger().debug({
-        sessionId: this.context.sessionId,
-        cookiesCount: this.collectedCookies.length,
-      }, 'Cookies collected');
-      
+      getLogger().debug(
+        { sessionId: this.context.sessionId, cookiesCount: this.collectedCookies.length },
+        'Cookies collected',
+      );
     } catch (error) {
-      getLogger().error({ 
-        error, 
-        sessionId: this.context.sessionId 
-      }, 'Error collecting cookies');
+      getLogger().error(
+        { error, sessionId: this.context.sessionId },
+        'Error collecting cookies',
+      );
     }
   }
 
   /**
-   * Verifica si una URL o content-type es candidato HLS
+   * Heurística de detección por URL y content-type HLS.
+   */
+  private isHlsManifest(url: string, contentType: string): boolean {
+    const u = (url || '').toLowerCase();
+    const ct = (contentType || '').toLowerCase();
+    
+    // Patrones de URL M3U8 más amplios
+    const hlsUrlPatterns = [
+      '.m3u8',
+      '/hls/',
+      '/hls-',
+      'manifest.m3u8',
+      'playlist.m3u8',
+      'index.m3u8',
+      'master.m3u8',
+      '/engine/hls',
+      'orbitcache.com',
+      'urlset/index',
+      'hls2-c',
+    ];
+    
+    // Verificar patrones de URL
+    if (hlsUrlPatterns.some(pattern => u.includes(pattern))) {
+      return true;
+    }
+    
+    // Content-Type HLS
+    const hlsContentTypes = [
+      'application/vnd.apple.mpegurl',
+      'application/x-mpegurl',
+      'audio/mpegurl',
+      'audio/x-mpegurl',
+    ];
+    
+    return hlsContentTypes.some(type => ct.includes(type));
+  }
+
+  /**
+   * Candidato por URL/CT y patrones opcionales del contexto.
    */
   private isHLSCandidate(url: string, contentType?: string): boolean {
-    // Verificar extensión .m3u8
-    if (url.includes('.m3u8')) {
+    const u = (url || '').toLowerCase();
+    
+    // Patrones de URL M3U8 más amplios
+    const hlsUrlPatterns = [
+      '.m3u8',
+      '/hls/',
+      '/hls-',
+      'manifest.m3u8',
+      'playlist.m3u8', 
+      'index.m3u8',
+      'master.m3u8',
+      '/engine/hls',
+      'orbitcache.com',
+      'urlset/index',
+      'hls2-c',
+    ];
+    
+    if (hlsUrlPatterns.some(pattern => u.includes(pattern))) {
       return true;
     }
 
-    // Verificar content-type HLS
     if (contentType) {
+      const ct = contentType.toLowerCase();
       const hlsContentTypes = [
         'application/vnd.apple.mpegurl',
         'application/x-mpegurl',
         'audio/mpegurl',
         'audio/x-mpegurl',
       ];
-      
-      if (hlsContentTypes.some(type => contentType.includes(type))) {
-        return true;
-      }
+      if (hlsContentTypes.some((t) => ct.includes(t))) return true;
     }
 
-    // Verificar patrones adicionales del contexto
     if (this.context.options?.m3u8Patterns) {
-      return this.context.options.m3u8Patterns.some(pattern => {
+      return this.context.options.m3u8Patterns.some((pattern) => {
         try {
           return new RegExp(pattern).test(url);
         } catch {
@@ -256,30 +349,46 @@ export class HLSDetector {
   }
 
   /**
-   * Añade un candidato HLS al mapa
+   * Añade un candidato HLS si no existe ya.
    */
-  private addCandidate(candidate: Omit<HLSCandidate, 'cookies'> & { cookies: Cookie[] }): void {
-    const existing = this.candidates.get(candidate.url);
-    
-    if (existing) {
-      // Merge con candidato existente
-      existing.headers = { ...existing.headers, ...candidate.headers };
-      existing.contentType = existing.contentType ?? candidate.contentType;
-      if (candidate.cookies.length > 0) {
-        existing.cookies = candidate.cookies;
-      }
-    } else {
-      this.candidates.set(candidate.url, candidate as HLSCandidate);
-    }
+  private addCandidate(url: string, contentType: string): void {
+    if (this.candidates.has(url)) return;
+
+    const newCandidate: HLSCandidate = {
+      url,
+      contentType,
+      headers: {},
+      cookies: [],
+      detectedAt: Date.now(),
+      source: 'response',
+    };
+
+    this.candidates.set(url, newCandidate);
+
+    getLogger().debug(
+      { sessionId: this.context.sessionId, url, contentType },
+      'HLS candidate detected',
+    );
   }
 
   /**
-   * Extrae headers relevantes para reproducción
+   * Normaliza headers a un shape plano string:string.
+   */
+  private normalizeHeaders(h: Record<string, any>): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(h || {})) {
+      const key = k.toLowerCase();
+      out[key] = Array.isArray(v) ? v.join(', ') : String(v);
+    }
+    return out;
+  }
+
+  /**
+   * Extrae headers relevantes para reproducción y replicación.
    */
   private extractRelevantHeaders(headers: Record<string, string>): Record<string, string> {
-    const relevantHeaders: Record<string, string> = {};
-    
-    const importantHeaders = [
+    const relevant: Record<string, string> = {};
+    const important = [
       'referer',
       'origin',
       'user-agent',
@@ -291,75 +400,92 @@ export class HLSDetector {
       'accept-language',
       'accept-encoding',
     ];
-
     for (const [key, value] of Object.entries(headers)) {
-      const lowerKey = key.toLowerCase();
-      
-      if (importantHeaders.includes(lowerKey)) {
-        relevantHeaders[key] = value;
-      }
-      
-      // Incluir headers custom (que empiecen con x-)
-      if (lowerKey.startsWith('x-') && !lowerKey.startsWith('x-forwarded')) {
-        relevantHeaders[key] = value;
+      const lower = key.toLowerCase();
+      if (important.includes(lower)) relevant[key] = value;
+      if (lower.startsWith('x-') && !lower.startsWith('x-forwarded')) {
+        relevant[key] = value;
       }
     }
-
-    return relevantHeaders;
+    return relevant;
   }
 
   /**
-   * Recopila headers importantes para el contexto global
+   * Mezcla headers relevantes a nivel de detector (para requests posteriores).
    */
   private collectHeaders(headers: Record<string, string>): void {
     const extracted = this.extractRelevantHeaders(headers);
     this.collectedHeaders = { ...this.collectedHeaders, ...extracted };
   }
 
-  /**
-   * Obtiene todos los candidatos detectados
-   */
   getCandidates(): HLSCandidate[] {
     return Array.from(this.candidates.values());
   }
 
-  /**
-   * Obtiene headers requeridos para reproducción
-   */
   getRequiredHeaders(): Record<string, string> {
     return { ...this.collectedHeaders };
   }
 
-  /**
-   * Obtiene cookies requeridas para reproducción
-   */
   getRequiredCookies(): Cookie[] {
     return [...this.collectedCookies];
   }
 
   /**
-   * Limpia el detector
+   * Libera listeners de Page/Browser y sesiones CDP.
    */
-  cleanup(): void {
-    this.candidates.clear();
-    this.collectedHeaders = {};
-    this.collectedCookies = [];
-  }
-
-  /**
-   * Obtiene estadísticas de detección
-   */
-  getStats(): {
-    candidatesCount: number;
-    headersCount: number;
-    cookiesCount: number;
-    detectionDuration: number;
-  } {
-    return {
-      candidatesCount: this.candidates.size,
-      headersCount: Object.keys(this.collectedHeaders).length,
-      cookiesCount: this.collectedCookies.length,
-      detectionDuration: Date.now() - this.context.startTime,
-    };
+  async dispose(): Promise<void> {
+    try {
+      if (this.page) {
+        try {
+          this.page.removeAllListeners('response');
+          this.page.removeAllListeners('request');
+          this.page.removeAllListeners('requestfinished');
+        } catch (error) {
+          try {
+            getLogger().error({ error, sessionId: this.context.sessionId }, 'Error removing page listeners');
+          } catch {}
+        }
+      }
+      if (this.browser && this.targetCreatedHandler) {
+        try {
+          this.browser.off('targetcreated', this.targetCreatedHandler);
+        } catch (error) {
+          try {
+            getLogger().error({ error, sessionId: this.context.sessionId }, 'Error removing browser listener');
+          } catch {}
+        }
+      }
+      
+      // Mejorar el manejo de errores en el cierre de sesiones CDP
+      const detachPromises = Array.from(this.cdpSessions).map(async (s) => {
+        try {
+          await s.detach();
+        } catch (error) {
+          try {
+            getLogger().debug({ error, sessionId: this.context.sessionId }, 'Error detaching CDP session');
+          } catch {}
+        }
+      });
+      
+      try {
+        await Promise.allSettled(detachPromises);
+      } catch (error) {
+        try {
+          getLogger().error({ error, sessionId: this.context.sessionId }, 'Error in CDP sessions cleanup');
+        } catch {}
+      }
+      
+      this.cdpSessions.clear();
+    } catch (error) {
+      try {
+        getLogger().error({ error, sessionId: this.context.sessionId }, 'Error in HLSDetector dispose');
+      } catch {}
+    } finally {
+      this.candidates.clear();
+      this.collectedHeaders = {};
+      this.collectedCookies = [];
+    }
   }
 }
+
+export default HLSDetector;
