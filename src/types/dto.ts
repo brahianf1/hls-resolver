@@ -109,7 +109,7 @@ export interface BrowserPoolOptions {
 
 export interface DetectionContext {
   url: string;
-  options: ResolveOptions;
+  options: ResolveHLSOptions;
   sessionId: string;
   startTime: number;
 }
@@ -138,6 +138,66 @@ export interface DetectionResult {
   rawFindings: RawFinding[];
   notes: string[];
 }
+
+// --- CDP Types ---
+export interface CdpResponse {
+  url: string;
+  status: number;
+  headers: Record<string, string>;
+  mimeType: string;
+  fromDiskCache: boolean;
+  fromServiceWorker: boolean;
+  protocol: string;
+  securityState: string;
+}
+
+// --- API v2 Types ---
+export const ResolveHLSRequestZod = z.object({
+  url: z.string().url(),
+  options: z.object({
+    timeoutMs: z.number().int().positive().default(10000),
+    clickRetries: z.number().int().min(0).max(5).default(1),
+    abortAfterFirst: z.boolean().default(true),
+    captureBodies: z.boolean().default(false),
+    headless: z.boolean().optional(),
+    userAgent: z.string().optional(),
+    viewport: z.object({
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+    }).optional(),
+    emulateMobile: z.boolean().optional(),
+    extraHeaders: z.record(z.string(), z.string()).optional(),
+    waitUntil: z.enum(['domcontentloaded', 'networkidle2', 'networkidle0']).optional(),
+    m3u8Patterns: z.array(z.string()).optional(),
+    debug: z.boolean().optional(),
+  }).optional(),
+});
+
+export const ManifestZod = z.object({
+  url: z.string(),
+  status: z.number(),
+  contentType: z.string(),
+  body: z.string().optional(),
+  fromTargetId: z.string(),
+  timestamp: z.number(),
+});
+
+export const ResolveHLSResponseZod = z.object({
+  manifests: z.array(ManifestZod),
+  timings: z.object({
+    total: z.number(),
+    navigation: z.number(),
+    activation: z.number(),
+    detection: z.number(),
+  }),
+  clicksPerformed: z.number(),
+  targetsObserved: z.number(),
+});
+
+export type ResolveHLSRequest = z.infer<typeof ResolveHLSRequestZod>;
+export type ResolveHLSOptions = z.infer<typeof ResolveHLSRequestZod.shape.options>;
+export type ResolveHLSResponse = z.infer<typeof ResolveHLSResponseZod>;
+export type Manifest = z.infer<typeof ManifestZod>;
 
 // --- JSON Schemas para Fastify ---
 export const resolveRequestSchema = ResolveRequestZod;
