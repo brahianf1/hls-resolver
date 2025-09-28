@@ -7,7 +7,7 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { loadConfig, getConfig, getCorsOrigins } from '../config/env.js';
 import { getLogger } from '../core/observability/logger.js';
-import { BrowserPool, configurePuppeteer } from '../core/resolver/browser.pool.js';
+import { BrowserPool } from '../core/resolver/browser.pool.js';
 import { ResolverService } from '../core/resolver/resolver.service.js';
 import apiKeyPlugin from '../core/security/api-key.js';
 import allowlistPlugin from '../core/security/allowlist.js';
@@ -20,9 +20,6 @@ import { StrategyCacheFactory } from '../core/cache/strategy-cache.factory.js';
 // Cargar configuración
 loadConfig();
 const config = getConfig();
-
-// Configurar puppeteer
-configurePuppeteer();
 
 // Crear instancia de Fastify con el Type Provider de Zod
 const fastify = Fastify({
