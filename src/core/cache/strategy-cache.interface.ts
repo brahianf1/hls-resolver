@@ -1,10 +1,11 @@
-export interface Strategy {
-  selector?: string;
-  timeout: number;
+import { ActivationStrategyName } from "../resolver/resolver.service.js";
+
+export interface ActivationStrategy {
+  name: ActivationStrategyName;
 }
 
-export interface IStrategyCache {
+export interface IActivationStrategyCache {
   initialize(): Promise<void>;
-  get(domain: string): Promise<Strategy | null>;
-  set(domain: string, strategy: Strategy): Promise<void>;
+  get(domain: string): Promise<ActivationStrategy | null>;
+  set(domain: string, strategy: ActivationStrategy): Promise<void>;
 }

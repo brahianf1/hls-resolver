@@ -1,12 +1,12 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { getLogger } from '../observability/logger.js';
-import { IStrategyCache, Strategy } from './strategy-cache.interface.js';
+import { IActivationStrategyCache, ActivationStrategy } from './strategy-cache.interface.js';
 
 const CACHE_FILE = 'strategy-cache.json';
 
-export class JsonStrategyCache implements IStrategyCache {
-  private cache: Map<string, Strategy> = new Map();
+export class JsonStrategyCache implements IActivationStrategyCache {
+  private cache: Map<string, ActivationStrategy> = new Map();
   private readonly logger = getLogger();
   private cacheFilePath: string;
 
@@ -33,18 +33,18 @@ export class JsonStrategyCache implements IStrategyCache {
     }
   }
 
-  async get(domain: string): Promise<Strategy | null> {
+  async get(domain: string): Promise<ActivationStrategy | null> {
     const strategy = this.cache.get(domain);
     if (strategy) {
-      this.logger.debug({ domain, strategy }, 'Strategy cache hit');
+      this.logger.debug({ domain, strategy: strategy.name }, 'Strategy cache hit');
       return strategy;
     }
     this.logger.debug({ domain }, 'Strategy cache miss');
     return null;
   }
 
-  async set(domain: string, strategy: Strategy): Promise<void> {
-    this.logger.debug({ domain, strategy }, 'Storing strategy in cache');
+  async set(domain: string, strategy: ActivationStrategy): Promise<void> {
+    this.logger.debug({ domain, strategy: strategy.name }, 'Storing strategy in cache');
     this.cache.set(domain, strategy);
     await this.persist();
   }

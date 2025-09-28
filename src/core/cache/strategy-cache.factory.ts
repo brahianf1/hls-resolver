@@ -1,11 +1,11 @@
 import { getConfig } from '../../config/env.js';
-import { IStrategyCache } from './strategy-cache.interface.js';
+import { IActivationStrategyCache } from './strategy-cache.interface.js';
 import { InMemoryStrategyCache } from './in-memory-strategy.cache.js';
 import { JsonStrategyCache } from './json-strategy.cache.js';
 import { getLogger } from '../observability/logger.js';
 
 export class StrategyCacheFactory {
-  public static createCache(): IStrategyCache {
+  public static createCache(): IActivationStrategyCache {
     const config = getConfig();
     const logger = getLogger();
 

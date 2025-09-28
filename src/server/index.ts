@@ -7,19 +7,22 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { loadConfig, getConfig, getCorsOrigins } from '../config/env.js';
 import { getLogger } from '../core/observability/logger.js';
-import { BrowserPool } from '../core/resolver/browser.pool.js';
+import { BrowserPool, configurePuppeteer } from '../core/resolver/browser.pool.js';
 import { ResolverService } from '../core/resolver/resolver.service.js';
 import apiKeyPlugin from '../core/security/api-key.js';
 import allowlistPlugin from '../core/security/allowlist.js';
 import { resolveRoutes } from './routes/resolve.route.js';
 import { healthRoutes } from './routes/health.route.js';
 import { metricsRoutes } from './routes/metrics.route.js';
-import { IStrategyCache } from '../core/cache/strategy-cache.interface.js';
+import { IActivationStrategyCache } from '../core/cache/strategy-cache.interface.js';
 import { StrategyCacheFactory } from '../core/cache/strategy-cache.factory.js';
 
 // Cargar configuración
 loadConfig();
 const config = getConfig();
+
+// Configurar puppeteer
+configurePuppeteer();
 
 // Crear instancia de Fastify con el Type Provider de Zod
 const fastify = Fastify({
@@ -38,7 +41,7 @@ fastify.setSerializerCompiler(serializerCompiler);
 // Variables globales
 let browserPool: BrowserPool;
 let resolverService: ResolverService;
-let strategyCache: IStrategyCache;
+let strategyCache: IActivationStrategyCache;
 
 /**
  * Configura los plugins de Fastify
@@ -313,12 +316,27 @@ async function main(): Promise<void> {
     // Manejar errores no capturados
     process.on('uncaughtException', (error) => {
       getLogger().fatal({ error }, 'Uncaught exception');
-      process.exit(1);
+      gracefulShutdown('uncaughtException').finally(() => process.exit(1));
     });
 
     process.on('unhandledRejection', (reason, promise) => {
       getLogger().fatal({ reason, promise }, 'Unhandled rejection');
-      process.exit(1);
+      
+      // Intentar recuperación si es posible
+      if (reason && typeof reason === 'object' && 'message' in reason) {
+        const message = (reason as Error).message;
+        // Si el error no es crítico, solo logearlo y continuar
+        if (message && (
+          message.includes('Target closed') ||
+          message.includes('Protocol error') ||
+          message.includes('Session closed')
+        )) {
+          getLogger().warn({ reason }, 'Non-critical unhandled rejection, continuing...');
+          return;
+        }
+      }
+      
+      gracefulShutdown('unhandledRejection').finally(() => process.exit(1));
     });
 
     // Iniciar servidor

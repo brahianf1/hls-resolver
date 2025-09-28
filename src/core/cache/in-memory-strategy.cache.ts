@@ -1,8 +1,8 @@
 import { getLogger } from '../observability/logger.js';
-import { IStrategyCache, Strategy } from './strategy-cache.interface.js';
+import { IActivationStrategyCache, ActivationStrategy } from './strategy-cache.interface.js';
 
-export class InMemoryStrategyCache implements IStrategyCache {
-  private cache: Map<string, Strategy> = new Map();
+export class InMemoryStrategyCache implements IActivationStrategyCache {
+  private cache: Map<string, ActivationStrategy> = new Map();
   private readonly logger = getLogger();
 
   async initialize(): Promise<void> {
@@ -11,18 +11,18 @@ export class InMemoryStrategyCache implements IStrategyCache {
     this.logger.info('In-memory strategy cache initialized.');
   }
 
-  async get(domain: string): Promise<Strategy | null> {
+  async get(domain: string): Promise<ActivationStrategy | null> {
     const strategy = this.cache.get(domain);
     if (strategy) {
-      this.logger.debug({ domain, strategy }, 'Strategy cache hit');
+      this.logger.debug({ domain, strategy: strategy.name }, 'Strategy cache hit');
       return strategy;
     }
     this.logger.debug({ domain }, 'Strategy cache miss');
     return null;
   }
 
-  async set(domain: string, strategy: Strategy): Promise<void> {
-    this.logger.debug({ domain, strategy }, 'Storing strategy in cache');
+  async set(domain: string, strategy: ActivationStrategy): Promise<void> {
+    this.logger.debug({ domain, strategy: strategy.name }, 'Storing strategy in cache');
     this.cache.set(domain, strategy);
   }
 }
