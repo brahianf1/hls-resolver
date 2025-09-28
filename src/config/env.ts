@@ -16,6 +16,7 @@ const envSchema = z.object({
   
   // Browser/Puppeteer
   PUPPETEER_HEADLESS: z.coerce.boolean().default(true),
+  PUPPETEER_ENABLE_ADBLOCKER: z.coerce.boolean().default(false),
   NAV_TIMEOUT_MS: z.coerce.number().default(30000),
   MAX_WAIT_MS: z.coerce.number().default(15000),
   M3U8_DOWNLOAD_TIMEOUT_MS: z.coerce.number().default(10000),
