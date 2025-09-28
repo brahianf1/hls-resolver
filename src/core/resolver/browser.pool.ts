@@ -2,9 +2,6 @@ import puppeteerDefault from 'puppeteer-extra';
 import { PuppeteerBlocker } from '@ghostery/adblocker-puppeteer';
 import fetch from 'cross-fetch';
 import { promises as fs } from 'node:fs';
-// Adblocker opcional (feature flag)
-// npm i -D puppeteer-extra-plugin-adblocker
-import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page, PuppeteerLaunchOptions } from 'puppeteer';
 import pLimit from 'p-limit';
@@ -21,17 +18,8 @@ import { getConfig } from '../../config/env.js';
 // HACK: Estandarizar la importación de puppeteer-extra para compatibilidad CJS/ESM
 const puppeteer = (puppeteerDefault as any).default ?? puppeteerDefault;
 
-export function configurePuppeteer() {
-  // Configurar puppeteer con stealth plugin
-  puppeteer.use(StealthPlugin());
-
-  // Activar adblocker si está habilitado en configuración
-  const _cfg = getConfig?.();
-  if (_cfg?.PUPPETEER_ENABLE_ADBLOCKER === true) {
-    const adblocker = (AdblockerPlugin as any).default ?? AdblockerPlugin;
-    puppeteer.use(adblocker({ blockTrackers: true }));
-  }
-}
+// Configurar puppeteer con stealth plugin
+puppeteer.use(StealthPlugin());
 
 const LaunchOptionsZod = z.object({
   headless: z.union([z.boolean(), z.literal('new')]).optional(),
@@ -52,18 +40,11 @@ export class BrowserPool {
   constructor(options: BrowserPoolOptions) {
     this.options = options;
     this.pageLimit = pLimit(options.maxConcurrentPages);
-    // Inicializar el bloqueador con listas precompiladas (ads + tracking), con caché binaria opcional
-    // Debe hacerse una sola vez por proceso para evitar sobrecarga en el arranque
-    try {
-      this.adBlockerReady = PuppeteerBlocker.fromPrebuiltAdsAndTracking(fetch, {
-        path: 'engine.bin',
-        read: fs.readFile,
-        write: fs.writeFile,
-      }).then((blocker) => {
-        this.adBlocker = blocker;
-      });
-    } catch {
-      // Si falla la carga de listas, continuar sin bloquear, para no romper el flujo
+
+    // Activar adblocker por defecto, a menos que se deshabilite explícitamente
+    const _cfg = getConfig?.();
+    if (_cfg?.PUPPETEER_ENABLE_ADBLOCKER !== false) {
+      this.initializeAdBlocker();
     }
     
     // Manejar señales de cierre
@@ -92,6 +73,27 @@ export class BrowserPool {
     } catch (error) {
       getLogger().error({ error }, 'Failed to initialize browser pool');
       throw error;
+    }
+  }
+
+  /**
+   * Inicializa el adblocker
+   */
+  private initializeAdBlocker(): void {
+    // Inicializar el bloqueador con listas precompiladas (ads + tracking), con caché binaria opcional
+    // Debe hacerse una sola vez por proceso para evitar sobrecarga en el arranque
+    try {
+      this.adBlockerReady = PuppeteerBlocker.fromPrebuiltAdsAndTracking(fetch, {
+        path: 'engine.bin',
+        read: fs.readFile,
+        write: fs.writeFile,
+      }).then((blocker) => {
+        this.adBlocker = blocker;
+        getLogger().info('Adblocker initialized successfully');
+      });
+    } catch (error) {
+      getLogger().warn({ error }, 'Failed to initialize adblocker, continuing without it');
+      // Si falla la carga de listas, continuar sin bloquear, para no romper el flujo
     }
   }
 
