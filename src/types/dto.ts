@@ -69,6 +69,14 @@ export const ResolveResponseZod = z.object({
   requiredCookies: z.array(CookieZod).nullish(),
   rawFindings: z.array(RawFindingZod).nullish(),
   notes: z.array(z.string()).nullish(),
+  timings: z.object({
+    total: z.number(),
+    navigation: z.number(),
+    activation: z.number(),
+    detection: z.number(),
+  }),
+  clicksPerformed: z.number(),
+  targetsObserved: z.number(),
 });
 
 export const HealthResponseZod = z.object({
@@ -215,10 +223,11 @@ export const BulkStatusResponseZod = z.object({
   status: z.string(),
   progress: z.number(),
   total: z.number(),
+  durationMs: z.number().optional(),
   results: z.array(z.object({
     url: z.string(),
     status: z.enum(['completed', 'failed']),
-    result: ResolveHLSResponseZod.optional(),
+    result: ResolveResponseZod.optional(),
     error: z.string().optional(),
   })).optional(),
 });

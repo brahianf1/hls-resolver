@@ -115,12 +115,23 @@ export async function resolveRoutes(
         };
 
         if (status === 'COMPLETED') {
+          const creationTimestamps = batchJobs.map(job => job.timestamp).filter((t): t is number => t !== null && t > 0);
+          const finishedTimestamps = batchJobs.map(job => job.finishedOn).filter((t): t is number => t !== null && t > 0);
+          
+          if (creationTimestamps.length > 0 && finishedTimestamps.length > 0) {
+            const minCreationTime = Math.min(...creationTimestamps);
+            const maxFinishedTime = Math.max(...finishedTimestamps);
+            response.durationMs = maxFinishedTime - minCreationTime;
+          }
+
           response.results = await Promise.all(batchJobs.map(async (job) => {
             const isCompleted = await job.isCompleted();
+            const result = isCompleted ? await resolverService.convertToLegacyResponse(job.returnvalue, job.data.url) : undefined;
+            
             return {
               url: job.data.url,
               status: isCompleted ? 'completed' : 'failed',
-              result: isCompleted ? job.returnvalue : undefined,
+              result: result,
               error: isCompleted ? undefined : job.failedReason,
             };
           }));

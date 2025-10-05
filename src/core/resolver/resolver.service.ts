@@ -99,6 +99,9 @@ export class ResolverService {
     };
 
     const hlsResponse = await this.resolveHLS(hlsRequest);
+    const timings = hlsResponse.timings;
+    const clicksPerformed = hlsResponse.clicksPerformed;
+    const targetsObserved = hlsResponse.targetsObserved;
 
     // Mapeo de la respuesta nueva al formato antiguo
     const oldStreams = await this.processHLSCandidates(
@@ -128,6 +131,49 @@ export class ResolverService {
       requiredCookies: [],
       rawFindings: hlsResponse.manifests.map(m => ({ url: m.url, contentType: m.contentType })),
       notes: [],
+      timings,
+      clicksPerformed,
+      targetsObserved,
+    };
+  }
+
+  /**
+   * Convierte una respuesta interna de HLS en el formato de respuesta heredado.
+   * @param hlsResponse La respuesta interna de HLS.
+   * @param originalUrl La URL original de la solicitud.
+   * @returns Una promesa que se resuelve con la respuesta en formato heredado.
+   */
+  public async convertToLegacyResponse(hlsResponse: ResolveHLSResponse, originalUrl: string): Promise<ResolveResponse> {
+    const oldStreams = await this.processHLSCandidates(
+      hlsResponse.manifests.map(m => ({
+        url: m.url,
+        contentType: m.contentType,
+        detectedAt: m.timestamp,
+        source: 'response',
+        headers: {},
+        cookies: [],
+      })),
+      {
+        url: originalUrl,
+        options: { timeoutMs: 10000, clickRetries: 1, abortAfterFirst: true, captureBodies: false },
+        sessionId: 'legacy-batch',
+        startTime: 0,
+      },
+    );
+
+    return {
+      sessionId: 'legacy-batch',
+      pageUrl: originalUrl,
+      detectedAt: new Date().toISOString(),
+      streams: oldStreams,
+      bestGuess: this.determineBestGuess(oldStreams),
+      requiredHeaders: {},
+      requiredCookies: [],
+      rawFindings: hlsResponse.manifests.map(m => ({ url: m.url, contentType: m.contentType })),
+      notes: [],
+      timings: hlsResponse.timings,
+      clicksPerformed: hlsResponse.clicksPerformed,
+      targetsObserved: hlsResponse.targetsObserved,
     };
   }
 
