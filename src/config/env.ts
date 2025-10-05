@@ -32,7 +32,6 @@ const envSchema = z.object({
   PROXY_PASSWORD: z.string().optional(),
 
   // Pool settings
-  MAX_CONCURRENT_PAGES: z.coerce.number().default(5),
   BROWSER_POOL_SIZE: z.coerce.number().default(2),
   
   // Worker

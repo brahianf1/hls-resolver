@@ -116,7 +116,7 @@ export async function resolveRoutes(
 
         if (status === 'COMPLETED') {
           const creationTimestamps = batchJobs.map(job => job.timestamp).filter((t): t is number => t !== null && t > 0);
-          const finishedTimestamps = batchJobs.map(job => job.finishedOn).filter((t): t is number => t !== null && t > 0);
+                    const finishedTimestamps = batchJobs.map(job => job.finishedOn).filter((t): t is number => !!t && t > 0);
           
           if (creationTimestamps.length > 0 && finishedTimestamps.length > 0) {
             const minCreationTime = Math.min(...creationTimestamps);
