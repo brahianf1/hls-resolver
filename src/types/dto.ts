@@ -69,6 +69,14 @@ export const ResolveResponseZod = z.object({
   requiredCookies: z.array(CookieZod).nullish(),
   rawFindings: z.array(RawFindingZod).nullish(),
   notes: z.array(z.string()).nullish(),
+  timings: z.object({
+    total: z.number(),
+    navigation: z.number(),
+    activation: z.number(),
+    detection: z.number(),
+  }),
+  clicksPerformed: z.number(),
+  targetsObserved: z.number(),
 });
 
 export const HealthResponseZod = z.object({
@@ -104,7 +112,6 @@ export interface BrowserPoolOptions {
   browserPoolSize: number;
   headless: boolean;
   userAgent: string;
-  proxy?: string;
 }
 
 export interface DetectionContext {
@@ -198,6 +205,36 @@ export type ResolveHLSRequest = z.infer<typeof ResolveHLSRequestZod>;
 export type ResolveHLSOptions = z.infer<typeof ResolveHLSRequestZod.shape.options>;
 export type ResolveHLSResponse = z.infer<typeof ResolveHLSResponseZod>;
 export type Manifest = z.infer<typeof ManifestZod>;
+
+// --- Bulk Processing Schemas ---
+export const BulkResolveRequestZod = z.object({
+  urls: z.array(z.string().url()).min(1, "Debe proporcionar al menos una URL").max(500, "No se pueden procesar más de 500 URLs por lote"),
+});
+
+export const BulkResolveResponseZod = z.object({
+  batchId: z.string(),
+  status: z.enum(['PENDING', 'PROCESSING', 'COMPLETED']),
+  totalJobs: z.number(),
+  message: z.string(),
+});
+
+export const BulkStatusResponseZod = z.object({
+  batchId: z.string(),
+  status: z.string(),
+  progress: z.number(),
+  total: z.number(),
+  durationMs: z.number().optional(),
+  results: z.array(z.object({
+    url: z.string(),
+    status: z.enum(['completed', 'failed']),
+    result: ResolveResponseZod.optional(),
+    error: z.string().optional(),
+  })).optional(),
+});
+
+export type BulkResolveRequest = z.infer<typeof BulkResolveRequestZod>;
+export type BulkResolveResponse = z.infer<typeof BulkResolveResponseZod>;
+export type BulkStatusResponse = z.infer<typeof BulkStatusResponseZod>;
 
 // --- JSON Schemas para Fastify ---
 export const resolveRequestSchema = ResolveRequestZod;

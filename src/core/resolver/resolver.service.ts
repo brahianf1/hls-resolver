@@ -34,6 +34,13 @@ import {
   IActivationStrategyCache,
   ActivationStrategy,
 } from '../cache/strategy-cache.interface.js';
+import { StrategyCacheFactory } from '../cache/strategy-cache.factory.js';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
+// HACK: Estandarizar la importación de puppeteer-extra para compatibilidad CJS/ESM
+const puppeteerInstance = (puppeteer as any).default ?? puppeteer;
+puppeteerInstance.use(StealthPlugin());
 
 export enum ActivationStrategyName {
   None = 'none',
@@ -53,18 +60,34 @@ export class ResolverService {
   private strategyCache: IActivationStrategyCache;
   private config = getConfig();
 
-  constructor(
-    browserPool: BrowserPool,
-    strategyCache: IActivationStrategyCache,
-  ) {
+  constructor(browserPool: BrowserPool, strategyCache: IActivationStrategyCache) {
     this.browserPool = browserPool;
     this.strategyCache = strategyCache;
   }
 
   /**
-   * @deprecated Utilizar resolveHLS en su lugar. Esta función se eliminará en futuras versiones.
+   * Resuelve una URL para encontrar un manifiesto HLS, opcionalmente usando un proxy.
+   * @param url La URL a resolver.
+   * @param proxyUrl La URL del proxy a utilizar (opcional).
+   * @returns Una promesa que se resuelve con la respuesta de la resolución.
    */
-  async resolve(request: ResolveRequest): Promise<ResolveResponse> {
+  public async resolve(url: string, proxyUrl?: string | null): Promise<ResolveHLSResponse> {
+    const request: ResolveHLSRequest = {
+      url,
+      options: {
+        timeoutMs: this.config.NAV_TIMEOUT_MS,
+        clickRetries: 1,
+        abortAfterFirst: true,
+        captureBodies: false,
+      },
+    };
+    return this.resolveHLS(request, proxyUrl);
+  }
+
+  /**
+   * @deprecated Utilizar resolve(url, proxyUrl) en su lugar. Esta función se eliminará en futuras versiones.
+   */
+  async resolveLegacy(request: ResolveRequest): Promise<ResolveResponse> {
     const hlsRequest: ResolveHLSRequest = {
       url: request.url,
       options: {
@@ -76,6 +99,9 @@ export class ResolverService {
     };
 
     const hlsResponse = await this.resolveHLS(hlsRequest);
+    const timings = hlsResponse.timings;
+    const clicksPerformed = hlsResponse.clicksPerformed;
+    const targetsObserved = hlsResponse.targetsObserved;
 
     // Mapeo de la respuesta nueva al formato antiguo
     const oldStreams = await this.processHLSCandidates(
@@ -105,10 +131,53 @@ export class ResolverService {
       requiredCookies: [],
       rawFindings: hlsResponse.manifests.map(m => ({ url: m.url, contentType: m.contentType })),
       notes: [],
+      timings,
+      clicksPerformed,
+      targetsObserved,
     };
   }
 
-  async resolveHLS(request: ResolveHLSRequest): Promise<ResolveHLSResponse> {
+  /**
+   * Convierte una respuesta interna de HLS en el formato de respuesta heredado.
+   * @param hlsResponse La respuesta interna de HLS.
+   * @param originalUrl La URL original de la solicitud.
+   * @returns Una promesa que se resuelve con la respuesta en formato heredado.
+   */
+  public async convertToLegacyResponse(hlsResponse: ResolveHLSResponse, originalUrl: string): Promise<ResolveResponse> {
+    const oldStreams = await this.processHLSCandidates(
+      hlsResponse.manifests.map(m => ({
+        url: m.url,
+        contentType: m.contentType,
+        detectedAt: m.timestamp,
+        source: 'response',
+        headers: {},
+        cookies: [],
+      })),
+      {
+        url: originalUrl,
+        options: { timeoutMs: 10000, clickRetries: 1, abortAfterFirst: true, captureBodies: false },
+        sessionId: 'legacy-batch',
+        startTime: 0,
+      },
+    );
+
+    return {
+      sessionId: 'legacy-batch',
+      pageUrl: originalUrl,
+      detectedAt: new Date().toISOString(),
+      streams: oldStreams,
+      bestGuess: this.determineBestGuess(oldStreams),
+      requiredHeaders: {},
+      requiredCookies: [],
+      rawFindings: hlsResponse.manifests.map(m => ({ url: m.url, contentType: m.contentType })),
+      notes: [],
+      timings: hlsResponse.timings,
+      clicksPerformed: hlsResponse.clicksPerformed,
+      targetsObserved: hlsResponse.targetsObserved,
+    };
+  }
+
+  async resolveHLS(request: ResolveHLSRequest, proxyUrl?: string | null): Promise<ResolveHLSResponse> {
     const sessionId = this.generateSessionId();
     const overallStartTime = Date.now();
     const timings = { total: 0, navigation: 0, activation: 0, detection: 0 };
@@ -118,12 +187,14 @@ export class ResolverService {
 
     const sanitizedUrl = sanitizeUrlForLogging(request.url);
     getLogger().info(
-      { sessionId, url: sanitizedUrl, options: request.options },
+      { sessionId, url: sanitizedUrl, options: request.options, proxy: !!proxyUrl },
       'Starting HLS resolve request',
     );
 
     let browserPage: BrowserPage | undefined;
     let detector: HLSDetector | undefined;
+    let tempBrowser: any; // Para navegadores temporales con proxy
+
     try {
       this.validateRequest({ url: request.url });
 
@@ -142,7 +213,41 @@ export class ResolverService {
         startTime: overallStartTime,
       };
 
-      browserPage = await this.browserPool.getPage();
+      if (proxyUrl) {
+        // Estrategia con Proxy: Lanzar un navegador temporal para esta petición
+        getLogger().debug({ sessionId, proxyUrl }, 'Launching temporary browser with proxy');
+
+        const proxy = new URL(proxyUrl);
+        const proxyServer = `${proxy.protocol}//${proxy.hostname}:${proxy.port}`;
+        const credentials = {
+          username: proxy.username,
+          password: proxy.password,
+        };
+
+        tempBrowser = await puppeteerInstance.launch({
+          headless: this.config.PUPPETEER_HEADLESS ? 'new' : false,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            `--proxy-server=${proxyServer}`
+          ],
+        });
+
+        const page = await tempBrowser.newPage();
+        
+        if (credentials.username && credentials.password) {
+            await page.authenticate(credentials);
+        }
+
+        browserPage = new BrowserPage(page, async () => { 
+          if (page && !page.isClosed()) await page.close();
+        });
+
+      } else {
+        // Estrategia sin Proxy: Usar el pool compartido
+        browserPage = await this.browserPool.getPage();
+      }
+
       targetsObserved = browserPage.getPage().browser().targets().length;
 
       detector = new HLSDetector(context);
@@ -197,6 +302,14 @@ export class ResolverService {
           await browserPage.release();
         } catch (error) {
           getLogger().error({ sessionId, error }, 'Error releasing browser page');
+        }
+      }
+      if (tempBrowser) {
+        try {
+          await tempBrowser.close();
+          getLogger().debug({ sessionId }, 'Temporary browser closed');
+        } catch (error) {
+           getLogger().error({ sessionId, error }, 'Error closing temporary browser');
         }
       }
       timings.total = Date.now() - overallStartTime;
