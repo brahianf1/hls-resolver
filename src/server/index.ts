@@ -216,7 +216,7 @@ async function initializeServices(): Promise<void> {
 
   // Inicializar browser pool
   browserPool = new BrowserPool({
-    maxConcurrentPages: config.MAX_CONCURRENT_PAGES,
+            maxConcurrentPages: config.WORKER_CONCURRENCY,
     browserPoolSize: config.BROWSER_POOL_SIZE,
     headless: config.PUPPETEER_HEADLESS,
     userAgent: config.USER_AGENT,

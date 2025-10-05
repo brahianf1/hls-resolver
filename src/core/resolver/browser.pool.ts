@@ -42,8 +42,8 @@ export class BrowserPool {
     this.pageLimit = pLimit(options.maxConcurrentPages);
 
     // Activar adblocker por defecto, a menos que se deshabilite explícitamente
-    const _cfg = getConfig?.();
-    if (_cfg?.PUPPETEER_ENABLE_ADBLOCKER !== false) {
+    const config = getConfig();
+    if (config.PUPPETEER_ENABLE_ADBLOCKER) {
       this.initializeAdBlocker();
     }
     
