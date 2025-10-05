@@ -1,16 +1,20 @@
 services:
-  resolver:
+  api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: stream-resolver
+    container_name: stream-resolver-api
     expose:
       - "${PORT:-8080}"
     environment:
       # Configuración del servidor
       - NODE_ENV=production
       - HOST=0.0.0.0
+      - PORT=${PORT:-8080}
       
+      # Conexiones
+      - REDIS_URL=redis://redis:6379
+
       # Seguridad (configurar en producción)
       - API_KEY=${API_KEY:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
@@ -21,8 +25,13 @@ services:
       - NAV_TIMEOUT_MS=30000
       - MAX_WAIT_MS=15000
       - USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36
-      - HTTP_PROXY=${HTTP_PROXY:-}
       
+      # Configuración del Proxy
+      - PROXY_ENABLED=${PROXY_ENABLED:-false}
+      - PROXY_ENDPOINT=${PROXY_ENDPOINT:-}
+      - PROXY_USERNAME=${PROXY_USERNAME:-}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:-}
+
       # Pool de navegadores
       - MAX_CONCURRENT_PAGES=5
       - BROWSER_POOL_SIZE=2
@@ -30,9 +39,9 @@ services:
       # Logging
       - LOG_LEVEL=info
       
-      # Rate limiting
-      - RATE_LIMIT_MAX=100
-      - RATE_LIMIT_WINDOW_MS=60000
+      # Rate limiting (para la API)
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-60000}
       
       # Session
       - SESSION_SECRET=${SESSION_SECRET:-default-secret-change-in-production}
@@ -51,6 +60,9 @@ services:
     networks:
       - resolver-network
     
+    depends_on:
+      - redis
+
     # Reinicio automático
     restart: unless-stopped
     
@@ -64,6 +76,77 @@ services:
     
     # Shared memory para Chromium
     shm_size: 2gb
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stream-resolver-worker
+    command: node dist/worker.js
+    environment:
+      # Configuración del servidor
+      - NODE_ENV=production
+      
+      # Conexiones
+      - REDIS_URL=redis://redis:6379
+      
+      # Configuración del navegador
+      - PUPPETEER_HEADLESS=true
+      - NAV_TIMEOUT_MS=30000
+      - MAX_WAIT_MS=15000
+      - USER_AGENT=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36
+      
+      # Configuración del Proxy
+      - PROXY_ENABLED=${PROXY_ENABLED:-false}
+      - PROXY_ENDPOINT=${PROXY_ENDPOINT:-}
+      - PROXY_USERNAME=${PROXY_USERNAME:-}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:-}
+      
+      # Configuración del worker
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-5}
+
+      # Pool de navegadores
+      - MAX_CONCURRENT_PAGES=5
+      - BROWSER_POOL_SIZE=2
+      
+      # Logging
+      - LOG_LEVEL=info
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    networks:
+      - resolver-network
+    depends_on:
+      - redis
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - SYS_ADMIN
+    shm_size: 2gb
+
+  redis:
+    image: redis:7-alpine
+    container_name: stream-resolver-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    networks:
+      - resolver-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 256M
+    restart: unless-stopped
 
   # Opcional: Prometheus para métricas
   prometheus:
@@ -81,7 +164,7 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--web.enable-lifecycle'
     depends_on:
-      - resolver
+      - api
     networks:
       - resolver-network
     restart: unless-stopped
@@ -118,3 +201,5 @@ volumes:
     name: stream-resolver-prometheus-data
   grafana-data:
     name: stream-resolver-grafana-data
+  redis-data:
+    name: stream-resolver-redis-data

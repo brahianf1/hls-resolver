@@ -123,9 +123,9 @@ export class BrowserPool {
     };
 
     // Configurar proxy si está especificado
-    if (this.options.proxy) {
-      launchOptions.args?.push(`--proxy-server=${this.options.proxy}`);
-    }
+    // if (this.options.proxy) {
+    //   launchOptions.args?.push(`--proxy-server=${this.options.proxy}`);
+    // }
 
     try {
       // Validar las opciones antes de lanzar el navegador
@@ -155,7 +155,7 @@ export class BrowserPool {
 
     return this.pageLimit(async () => {
       try {
-        const browser = this.getAvailableBrowser();
+        const browser = await this.getAvailableBrowser();
         const page = await browser.newPage();
         
         this.activePagesCount++;
@@ -311,12 +311,16 @@ export class BrowserPool {
   /**
    * Obtiene un navegador disponible del pool
    */
-  private getAvailableBrowser(): Browser {
+  private async getAvailableBrowser(): Promise<Browser> {
     // Simple round-robin selection
     const browser = this.browsers[Math.floor(Math.random() * this.browsers.length)];
     
     if (!browser || !browser.isConnected()) {
-      throw new Error('No available browser in pool');
+      // Re-crear el navegador si se desconectó
+      getLogger().warn('Browser disconnected, attempting to recreate...');
+      const newBrowser = await this.createBrowser();
+      this.browsers = this.browsers.map(b => (b === browser ? newBrowser : b));
+      return newBrowser;
     }
     
     return browser;
@@ -468,7 +472,9 @@ export class BrowserPage {
       getLogger().error({ error }, 'Error closing page');
     } finally {
       this.isReleased = true;
-      this.releaseCallback();
+      if (this.releaseCallback) {
+        this.releaseCallback();
+      }
     }
   }
 }

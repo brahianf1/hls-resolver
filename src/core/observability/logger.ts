@@ -4,6 +4,9 @@ const pinoInstance = (pino as any).default ?? pino;
 
 import { getConfig, isDevelopment } from '../../config/env.js';
 
+// Definir la interfaz del logger para desacoplar de pino
+export type ILogger = pino.Logger;
+
 // Campos sensibles que deben ser enmascarados en logs
 const SENSITIVE_FIELDS = [
   'password',
@@ -46,10 +49,10 @@ function maskSensitiveData(obj: unknown): unknown {
   return masked;
 }
 
-let loggerInstance: pino.Logger;
+let loggerInstance: ILogger;
 
 // Configuración del logger base
-function createLogger(): pino.Logger {
+function initializeLogger(): ILogger {
   const config = getConfig();
   
   const loggerOptions: pino.LoggerOptions = {
@@ -88,15 +91,20 @@ function createLogger(): pino.Logger {
   return pinoInstance(loggerOptions);
 }
 
-export function getLogger(): pino.Logger {
+export function getLogger(): ILogger {
   if (!loggerInstance) {
-    loggerInstance = createLogger();
+    loggerInstance = initializeLogger();
   }
   return loggerInstance;
 }
 
+// Logger con contexto específico (para API, worker, etc.)
+export function createLogger(context: string, level?: pino.Level): ILogger {
+  return getLogger().child({ context, level });
+}
+
 // Logger con contexto de request
-export function createRequestLogger(requestId: string): pino.Logger {
+export function createRequestLogger(requestId: string): ILogger {
   return getLogger().child({ requestId });
 }
 
