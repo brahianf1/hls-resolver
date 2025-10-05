@@ -9,6 +9,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   STRATEGY_CACHE_TYPE: z.enum(['memory', 'json']).default('memory'),
   
+  // Redis
+  REDIS_URL: z.string().url(),
+
   // Security
   API_KEY: z.string().optional(),
   CORS_ORIGINS: z.string().default('*'),
@@ -21,12 +24,20 @@ const envSchema = z.object({
   MAX_WAIT_MS: z.coerce.number().default(15000),
   M3U8_DOWNLOAD_TIMEOUT_MS: z.coerce.number().default(10000),
   USER_AGENT: z.string().default('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'),
-  HTTP_PROXY: z.string().optional(),
   
+  // Proxy
+  PROXY_ENABLED: z.coerce.boolean().default(false),
+  PROXY_ENDPOINT: z.string().optional(),
+  PROXY_USERNAME: z.string().optional(),
+  PROXY_PASSWORD: z.string().optional(),
+
   // Pool settings
   MAX_CONCURRENT_PAGES: z.coerce.number().default(5),
   BROWSER_POOL_SIZE: z.coerce.number().default(2),
   
+  // Worker
+  WORKER_CONCURRENCY: z.coerce.number().default(5),
+
   // Logging
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   
@@ -53,7 +64,8 @@ export function loadConfig(): EnvConfig {
 
   const envPath = path.resolve(process.cwd(), envFile);
 
-  dotenv.config({ path: envPath });
+  // Forzar que las variables del archivo .env sobrescriban las del sistema
+  dotenv.config({ path: envPath, override: true });
   
   try {
     config = envSchema.parse(process.env);

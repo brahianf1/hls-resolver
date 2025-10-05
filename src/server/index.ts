@@ -220,7 +220,6 @@ async function initializeServices(): Promise<void> {
     browserPoolSize: config.BROWSER_POOL_SIZE,
     headless: config.PUPPETEER_HEADLESS,
     userAgent: config.USER_AGENT,
-    proxy: config.HTTP_PROXY || undefined,
   });
 
   await browserPool.initialize();
