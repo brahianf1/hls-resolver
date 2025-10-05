@@ -1,9 +1,9 @@
 services:
-  api:
+  resolver:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: stream-resolver-api
+    container_name: stream-resolver
     expose:
       - "${PORT:-8080}"
     environment:
@@ -164,7 +164,7 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--web.enable-lifecycle'
     depends_on:
-      - api
+      - resolver
     networks:
       - resolver-network
     restart: unless-stopped
