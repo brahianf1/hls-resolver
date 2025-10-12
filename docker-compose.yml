@@ -19,6 +19,8 @@ services:
       - API_KEY=${API_KEY:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - ALLOWLIST_HOSTS=${ALLOWLIST_HOSTS:-}
+      - BULL_BOARD_USER=${BULL_BOARD_USER:-admin}
+      - BULL_BOARD_PASSWORD=${BULL_BOARD_PASSWORD:-changeme}
       
       # Configuración del navegador
       - PUPPETEER_HEADLESS=true
