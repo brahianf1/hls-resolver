@@ -1,4 +1,5 @@
 import { Job } from 'bullmq';
+import { Queue } from 'bullmq';
 
 export interface IJob<T = any> {
   id?: string;
@@ -24,4 +25,6 @@ export interface IQueueService {
    * Cierra la conexión de la cola de forma segura.
    */
   close(): Promise<void>;
+
+  getQueue(): Queue;
 }

@@ -348,3 +348,52 @@ docker run -e LOG_LEVEL=debug stream-resolver
 ## Licencia
 
 MIT
+
+## Entorno de Desarrollo Local
+
+Para ejecutar la aplicación localmente fuera de Docker (`npm run dev`), es necesario tener una instancia de Redis funcionando en la máquina.
+
+### Prerrequisitos
+
+- **Redis**: La forma recomendada de ejecutar Redis en Windows 11 es a través de WSL (Subsistema de Windows para Linux).
+
+### Pasos para Configurar Redis en WSL
+
+1. **Instalar WSL**: Si no lo tienes, abre PowerShell como Administrador y ejecuta:
+   ```powershell
+   wsl --install
+   ```
+   Puede que necesites reiniciar tu equipo.
+
+2. **Acceder a WSL**: En una nueva terminal, escribe `wsl`.
+
+3. **Instalar Redis**: Dentro de la terminal de WSL, ejecuta:
+   ```bash
+   sudo apt update
+   sudo apt install redis-server
+   ```
+
+4. **Iniciar Redis**: Antes de iniciar la aplicación, asegúrate de que el servicio de Redis esté activo. Ejecuta:
+   ```bash
+   sudo service redis-server start
+   ```
+
+   Puedes verificar que está funcionando con `redis-cli ping`, que debería devolver `PONG`.
+
+Una vez que Redis esté en funcionamiento, puedes iniciar la aplicación en modo de desarrollo con `npm run dev` en una terminal de PowerShell separada.
+
+---
+
+## Monitoreo y Gestión
+
+### Panel de Colas de Tareas (Bull Board)
+
+El proyecto incluye un panel de administración para visualizar y gestionar las colas de tareas de BullMQ.
+
+- **URL**: `/admin/queues`
+- **Acceso en Desarrollo**: `http://localhost:8080/admin/queues`
+- **Credenciales por Defecto (desarrollo)**:
+  - **Usuario**: `admin`
+  - **Contraseña**: `dev`
+
+Las credenciales para el entorno de producción se deben configurar a través de las variables de entorno `BULL_BOARD_USER` y `BULL_BOARD_PASSWORD` en tu plataforma de despliegue (ej. Dokploy).
