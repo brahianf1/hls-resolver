@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'url';
 import { resolve } from 'path';
-import Fastify from 'fastify';
+import fastify, { FastifyInstance } from 'fastify';
+import middie from '@fastify/middie';
+import { Server } from 'http';
 import { ZodTypeProvider, validatorCompiler, serializerCompiler } from 'fastify-type-provider-zod';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
@@ -14,6 +16,7 @@ import allowlistPlugin from '../core/security/allowlist.js';
 import { resolveRoutes } from './routes/resolve.route.js';
 import { healthRoutes } from './routes/health.route.js';
 import { metricsRoutes } from './routes/metrics.route.js';
+import { setupBullBoard } from './routes/bull-board.route.js';
 import { IActivationStrategyCache } from '../core/cache/strategy-cache.interface.js';
 import { StrategyCacheFactory } from '../core/cache/strategy-cache.factory.js';
 
@@ -22,7 +25,7 @@ loadConfig();
 const config = getConfig();
 
 // Crear instancia de Fastify con el Type Provider de Zod
-const fastify = Fastify({
+const fastifyInstance = fastify({
   logger: false, // Usamos nuestro logger personalizado
   requestIdHeader: 'x-request-id',
   requestIdLogLabel: 'requestId',
@@ -32,8 +35,8 @@ const fastify = Fastify({
   },
 }).withTypeProvider<ZodTypeProvider>();
 
-fastify.setValidatorCompiler(validatorCompiler);
-fastify.setSerializerCompiler(serializerCompiler);
+fastifyInstance.setValidatorCompiler(validatorCompiler);
+fastifyInstance.setSerializerCompiler(serializerCompiler);
 
 // Variables globales
 let browserPool: BrowserPool;
@@ -44,8 +47,11 @@ let strategyCache: IActivationStrategyCache;
  * Configura los plugins de Fastify
  */
 async function setupPlugins(): Promise<void> {
+  // Middleware support for Express-style middlewares
+  await fastifyInstance.register(middie);
+
   // Plugin de CORS
-  await fastify.register(cors, {
+  await fastifyInstance.register(cors, {
     origin: getCorsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key', 'X-Request-ID'],
@@ -53,7 +59,7 @@ async function setupPlugins(): Promise<void> {
   });
 
   // Plugin de Swagger (documentación)
-  await fastify.register(swagger, {
+  await fastifyInstance.register(swagger, {
     openapi: {
       info: {
         title: 'Stream Resolver API',
@@ -89,7 +95,7 @@ async function setupPlugins(): Promise<void> {
   });
 
   // Plugin de Swagger UI
-  await fastify.register(swaggerUi, {
+  await fastifyInstance.register(swaggerUi, {
     routePrefix: '/docs',
     uiConfig: {
       docExpansion: 'list',
@@ -100,8 +106,8 @@ async function setupPlugins(): Promise<void> {
   });
 
   // Plugins de seguridad
-  await fastify.register(apiKeyPlugin);
-  await fastify.register(allowlistPlugin);
+  await fastifyInstance.register(apiKeyPlugin);
+  await fastifyInstance.register(allowlistPlugin);
 
   getLogger().info('Fastify plugins configured');
 }
@@ -111,7 +117,7 @@ async function setupPlugins(): Promise<void> {
  */
 function setupHooks(): void {
   // Hook para logging de requests
-  fastify.addHook('onRequest', async (request, _reply) => {
+  fastifyInstance.addHook('onRequest', async (request, _reply) => {
     getLogger().info({
       requestId: request.id,
       method: request.method,
@@ -122,7 +128,7 @@ function setupHooks(): void {
   });
 
   // Hook para logging de responses
-  fastify.addHook('onResponse', async (request, reply) => {
+  fastifyInstance.addHook('onResponse', async (request, reply) => {
     getLogger().info({
       requestId: request.id,
       method: request.method,
@@ -133,7 +139,7 @@ function setupHooks(): void {
   });
 
   // Hook para manejo de errores
-  fastify.setErrorHandler(async (error, request, reply) => {
+  fastifyInstance.setErrorHandler(async (error, request, reply) => {
     getLogger().error({
       requestId: request.id,
       method: request.method,
@@ -161,7 +167,7 @@ function setupHooks(): void {
   });
 
   // Hook para manejar rutas no encontradas
-  fastify.setNotFoundHandler(async (request, reply) => {
+  fastifyInstance.setNotFoundHandler(async (request, reply) => {
     getLogger().warn({
       requestId: request.id,
       method: request.method,
@@ -186,7 +192,7 @@ function setupHooks(): void {
  */
 async function setupRoutes(): Promise<void> {
   // Ruta raíz
-  fastify.get('/', async (_request, reply) => {
+  fastifyInstance.get('/', async (_request, reply) => {
     return reply.send({
       service: 'Stream Resolver',
       version: '1.0.0',
@@ -197,9 +203,13 @@ async function setupRoutes(): Promise<void> {
   });
 
   // Registrar rutas
-  await resolveRoutes(fastify, resolverService);
-  await healthRoutes(fastify, browserPool);
-  await metricsRoutes(fastify);
+  await resolveRoutes(fastifyInstance, resolverService);
+  await healthRoutes(fastifyInstance, browserPool);
+  await metricsRoutes(fastifyInstance);
+  
+  // Bull Board UI (Express middleware)
+  const bullBoardRouter = setupBullBoard();
+  fastifyInstance.use('/admin/queues', bullBoardRouter);
 
   getLogger().info('Routes configured');
 }
@@ -237,7 +247,7 @@ async function initializeServices(): Promise<void> {
  */
 async function startServer(): Promise<void> {
   try {
-    await fastify.listen({
+    await fastifyInstance.listen({
       host: config.HOST,
       port: config.PORT,
     });
@@ -263,7 +273,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   try {
     // Cerrar servidor HTTP
-    await fastify.close();
+    await fastifyInstance.close();
     getLogger().info('HTTP server closed');
 
     // Cerrar browser pool
@@ -376,4 +386,4 @@ if (import.meta.url.startsWith('file:')) {
   }
 }
 
-export { fastify, main };
+export { fastifyInstance, main };
