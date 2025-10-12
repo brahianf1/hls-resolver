@@ -46,6 +46,9 @@ const envSchema = z.object({
   
   // Session
   SESSION_SECRET: z.string().default('default-secret-change-in-production'),
+  // Bull Board
+  BULL_BOARD_USER: z.string().optional(),
+  BULL_BOARD_PASSWORD: z.string().optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
