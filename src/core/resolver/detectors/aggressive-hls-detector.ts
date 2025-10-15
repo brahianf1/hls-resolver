@@ -80,18 +80,8 @@ export class AggressiveHLSDetector {
             },
             '⭐ HLS-related request captured',
           );
-        } else {
-          // DEBUG: Log de todos los requests para análisis
-          getLogger().debug(
-            {
-              sessionId: this.sessionId,
-              url,
-              method: request.method(),
-              resourceType: request.resourceType(),
-            },
-            '🔍 Request captured (not HLS)',
-          );
         }
+        // ⚡ OPTIMIZACIÓN: Removido logging de requests no-HLS para mejor performance
       } catch (error) {
         getLogger().debug(
           { sessionId: this.sessionId, error },
@@ -127,22 +117,8 @@ export class AggressiveHLSDetector {
             },
             '⭐ HLS-related response captured',
           );
-        } else {
-          // DEBUG: Log de responses importantes (XHR, Fetch, Media)
-          const resourceType = response.request().resourceType();
-          if (['xhr', 'fetch', 'media', 'document'].includes(resourceType)) {
-            getLogger().debug(
-              {
-                sessionId: this.sessionId,
-                url,
-                status,
-                contentType,
-                resourceType,
-              },
-              '🔍 Response captured (not HLS but important type)',
-            );
-          }
         }
+        // ⚡ OPTIMIZACIÓN: Removido logging de responses no-HLS para mejor performance
       } catch (error) {
         getLogger().debug(
           { sessionId: this.sessionId, error },
@@ -202,43 +178,30 @@ export class AggressiveHLSDetector {
    * Similar al formato de salida de n8n para facilitar comparación.
    */
   getResults(): AggressiveDetectionResult {
-    // DEBUG: Log todas las URLs capturadas para análisis
-    getLogger().debug(
-      {
-        sessionId: this.sessionId,
-        totalCaptured: this.captured.length,
-        sampleUrls: this.captured.slice(0, 10).map(c => ({
-          url: c.url.substring(0, 100),
-          type: c.type,
-          resourceType: c.resourceType,
-        })),
-      },
-      '📊 All captured URLs (first 10)',
-    );
-
+    // ⚡ OPTIMIZACIÓN: Logs reducidos solo si hay hallazgos interesantes
+    
     // Extraer URLs únicas
     const allUrls = this.captured
       .map((c) => c.url)
       .filter((u) => u);
 
-    // DEBUG: Buscar patrones específicos
+    // Buscar patrones específicos
     const hasM3u8 = allUrls.filter((u) => u.toLowerCase().includes('.m3u8'));
     const hasTs = allUrls.filter((u) => u.toLowerCase().includes('.ts'));
-    const hasHls = allUrls.filter((u) => u.toLowerCase().includes('hls'));
-    const hasStream = allUrls.filter((u) => u.toLowerCase().includes('stream'));
     
-    getLogger().debug(
-      {
-        sessionId: this.sessionId,
-        hasM3u8: hasM3u8.length,
-        hasTs: hasTs.length,
-        hasHls: hasHls.length,
-        hasStream: hasStream.length,
-        sampleM3u8: hasM3u8.slice(0, 3),
-        sampleTs: hasTs.slice(0, 3),
-      },
-      '🔍 Pattern analysis in captured URLs',
-    );
+    // Solo log si encontramos algo interesante
+    if (hasM3u8.length > 0 || hasTs.length > 0) {
+      getLogger().debug(
+        {
+          sessionId: this.sessionId,
+          hasM3u8: hasM3u8.length,
+          hasTs: hasTs.length,
+          sampleM3u8: hasM3u8.slice(0, 3),
+          sampleTs: hasTs.slice(0, 3),
+        },
+        '🔍 HLS patterns found in HTTP captured URLs',
+      );
+    }
 
     // Clasificar M3U8s
     const m3u8Urls = [...new Set(allUrls.filter((u) => u.includes('.m3u8')))];

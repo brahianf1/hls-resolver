@@ -63,10 +63,12 @@ export class AntiDevtoolResolverService {
       const page = browserPage.getPage();
       await detector.setup(page);
 
-      // 3. Navegar a la URL
+      // 3. ⚡ OPTIMIZACIÓN: Navegar con waitUntil más rápido
+      // networkidle0 espera que no haya requests por 500ms (lento)
+      // domcontentloaded es suficiente para estos sitios
       const navStartTime = Date.now();
       await browserPage.navigateTo(options.url, {
-        waitUntil: 'networkidle0',
+        waitUntil: 'domcontentloaded', // Más rápido que networkidle0
         timeout: options.timeoutMs || 30000,
       });
       timings.navigation = Date.now() - navStartTime;
@@ -76,69 +78,53 @@ export class AntiDevtoolResolverService {
         '✅ Navigation completed, starting player interaction',
       );
 
-      // 4. Espera inicial para que la página cargue
-      await page.waitForTimeout(3000);
+      // 4. ⚡ OPTIMIZACIÓN: Espera mínima inicial (reducida de 3000ms a 1500ms)
+      await page.waitForTimeout(1500);
 
-      // 5. Intentar encontrar y clickear el reproductor
-      const activationStartTime = Date.now();
-      
-      // DEBUG: Ver qué elementos hay en la página antes de hacer click
-      const pageInfo = await page.evaluate(() => {
+      // 5. ⚡ OPTIMIZACIÓN CRÍTICA: Extraer HLS del DOM TEMPRANO
+      // El M3U8 a menudo ya está en el DOM después de navegar, sin necesidad de click
+      const earlyHlsFromDOM = await page.evaluate(() => {
+        const results: string[] = [];
         const videos = document.querySelectorAll('video');
-        const players = document.querySelectorAll('[id*="player"], [class*="player"]');
-        const iframes = document.querySelectorAll('iframe');
-        
-        return {
-          videoCount: videos.length,
-          videoSrcs: Array.from(videos).map(v => (v as HTMLVideoElement).src || '(empty)'),
-          playerCount: players.length,
-          playerIds: Array.from(players).map(p => p.id || p.className),
-          iframeCount: iframes.length,
-          iframeSrcs: Array.from(iframes).map(i => (i as HTMLIFrameElement).src),
-        };
+        videos.forEach(video => {
+          const src = (video as HTMLVideoElement).src;
+          if (src && (src.includes('.m3u8') || src.includes('hls'))) {
+            results.push(src);
+          }
+        });
+        return results;
       });
       
-      getLogger().debug(
-        {
-          sessionId,
-          pageInfo,
-        },
-        '📋 Page elements before click',
-      );
+      // Si ya encontramos HLS en DOM, podemos reducir esperas
+      const hasEarlyHLS = earlyHlsFromDOM.length > 0;
+      
+      if (hasEarlyHLS) {
+        getLogger().info(
+          {
+            sessionId,
+            hlsUrls: earlyHlsFromDOM,
+          },
+          '⚡ HLS found in DOM immediately after navigation (early extraction)',
+        );
+      }
+
+      // 6. Intentar encontrar y clickear el reproductor
+      const activationStartTime = Date.now();
       
       // Selectores comprehensivos para reproductores
       const playerSelector =
         '#player, video, .player, [id*="player"], [class*="player"]';
 
       try {
-        // Intentar esperar por el selector del reproductor
-        await page.waitForSelector(playerSelector, { timeout: 10000 });
-        
-        // DEBUG: Ver qué elemento se encontró
-        const foundElement = await page.evaluate((selector) => {
-          const el = document.querySelector(selector);
-          return el ? {
-            tagName: el.tagName,
-            id: el.id,
-            className: el.className,
-            visible: window.getComputedStyle(el).display !== 'none',
-          } : null;
-        }, playerSelector);
-        
-        getLogger().debug(
-          {
-            sessionId,
-            foundElement,
-          },
-          '🎯 Player element found',
-        );
-        
+        // ⚡ OPTIMIZACIÓN: Reducir timeout si ya tenemos HLS
+        const selectorTimeout = hasEarlyHLS ? 3000 : 10000;
+        await page.waitForSelector(playerSelector, { timeout: selectorTimeout });
         await page.click(playerSelector);
         clicksPerformed++;
         
         getLogger().info(
           { sessionId },
-          '✓ Click en reproductor (selector específico)',
+          '✓ Click en reproductor',
         );
       } catch (e) {
         // Fallback: Click en el centro de la ventana
@@ -147,39 +133,40 @@ export class AntiDevtoolResolverService {
           height: window.innerHeight,
         }));
 
-        getLogger().debug(
-          {
-            sessionId,
-            dimensions,
-            error: (e as Error).message,
-          },
-          '⚠️ Player selector failed, using center click fallback',
-        );
-
         await page.mouse.click(dimensions.width / 2, dimensions.height / 2);
         clicksPerformed++;
         
         getLogger().info(
           { sessionId },
-          '✓ Click en centro de la ventana (fallback)',
+          '✓ Click en centro (fallback)',
         );
       }
 
       timings.activation = Date.now() - activationStartTime;
 
-      // 6. Esperar a que se carguen los manifiestos y segmentos
-      const waitTime = options.waitAfterClick || 8000;
+      // 7. ⚡ OPTIMIZACIÓN: Espera inteligente basada en early detection
+      // Si ya encontramos HLS antes del click, reducir espera dramáticamente
+      const baseWaitTime = options.waitAfterClick || 8000;
+      const optimizedWaitTime = hasEarlyHLS ? Math.min(2000, baseWaitTime) : baseWaitTime;
+      
       getLogger().debug(
-        { sessionId, waitTime },
-        `Waiting ${waitTime}ms for HLS streams to load...`,
+        {
+          sessionId,
+          baseWaitTime,
+          optimizedWaitTime,
+          hasEarlyHLS,
+          reason: hasEarlyHLS ? 'HLS found early, using reduced wait' : 'No early HLS, using full wait',
+        },
+        `Waiting ${optimizedWaitTime}ms for HLS streams to load...`,
       );
       
-      await page.waitForTimeout(waitTime);
+      await page.waitForTimeout(optimizedWaitTime);
 
-      // 7. CRÍTICO: Extraer HLS del DOM directamente (como en n8n)
-      // Esto es necesario porque el src del video puede no generar requests HTTP
+      // 8. ⚡ OPTIMIZACIÓN: Extraer HLS del DOM (combinando early + final)
       const domExtractionStartTime = Date.now();
-      const hlsFromDOM = await page.evaluate(() => {
+      
+      // Re-extraer del DOM (puede haber cambiado después del click)
+      const finalHlsFromDOM = await page.evaluate(() => {
         const results = {
           videoSrcs: [] as string[],
           sourceSrcs: [] as string[],
@@ -206,21 +193,29 @@ export class AntiDevtoolResolverService {
         return results;
       });
       
+      // Combinar early + final extractions
+      const hlsFromDOM = {
+        videoSrcs: [...new Set([...earlyHlsFromDOM, ...finalHlsFromDOM.videoSrcs])],
+        sourceSrcs: finalHlsFromDOM.sourceSrcs,
+      };
+      
       getLogger().info(
         {
           sessionId,
           videoSrcs: hlsFromDOM.videoSrcs,
           sourceSrcs: hlsFromDOM.sourceSrcs,
+          earlyFound: earlyHlsFromDOM.length,
+          finalFound: finalHlsFromDOM.videoSrcs.length,
         },
-        '🎬 HLS URLs extracted from DOM',
+        '🎬 HLS URLs extracted from DOM (early + final)',
       );
 
-      // 8. Obtener resultados del detector agresivo
+      // 9. Obtener resultados del detector agresivo
       const detectionStartTime = Date.now();
       const detectionResult = detector.getResults();
       timings.detection = Date.now() - detectionStartTime;
 
-      // 9. Combinar resultados: HTTP requests + DOM extraction
+      // 10. Combinar resultados: HTTP requests + DOM extraction
       const allM3u8Urls = new Set<string>();
       
       // Agregar URLs del DOM (prioridad alta)

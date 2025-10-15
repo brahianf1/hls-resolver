@@ -66,9 +66,7 @@ export class ResolverService {
   // Dominios predeterminados que requieren protección anti-devtool
   private static DEFAULT_ANTI_DEVTOOL_DOMAINS = [
     'lamovie.link',
-    'voe.sx',
-    'streamtape.com',
-    'doodstream.com',
+    'vimeos.net',
   ];
 
   constructor(browserPool: BrowserPool, strategyCache: IActivationStrategyCache) {
