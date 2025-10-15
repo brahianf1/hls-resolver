@@ -5,6 +5,7 @@ Servicio headless para detectar y resolver URLs de streams HLS (.m3u8) desde rep
 ## Características
 
 - **Detección HLS**: Identifica automáticamente streams HLS en páginas web
+- **🛡️ Protección Anti-Devtools**: Sistema especializado para sitios con bloqueadores (lamovie.link, voe.sx, etc.)
 - **Headless Navigation**: Usa Puppeteer con stealth plugin para navegar páginas
 - **Metadatos Completos**: Extrae headers, cookies y tokens necesarios para reproducción
 - **Pool de Navegadores**: Gestión eficiente de instancias de Chromium
@@ -114,6 +115,23 @@ curl -X POST http://localhost:8080/api/v1/resolve \
 }
 ```
 
+### Endpoint para Sitios Protegidos (Anti-Devtools)
+
+**POST** `/api/v1/resolve/protected`
+
+Para sitios con bloqueadores anti-devtools (como lamovie.link, voe.sx):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/resolve/protected \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "url": "https://lamovie.link/embed-xxxxx.html"
+  }'
+```
+
+**Nota:** El endpoint `/api/v1/resolve` detecta automáticamente sitios protegidos y aplica la protección anti-devtool cuando es necesario.
+
 ### Otros Endpoints
 
 - **GET** `/health` - Health check básico
@@ -146,6 +164,11 @@ HTTP_PROXY=http://proxy:8080
 # Pool
 MAX_CONCURRENT_PAGES=5
 BROWSER_POOL_SIZE=2
+
+# Anti-Devtool Protection (Nueva funcionalidad)
+ANTI_DEVTOOL_ENABLED=true
+ANTI_DEVTOOL_DOMAINS=  # Opcional: dominios personalizados
+ANTI_DEVTOOL_WAIT_AFTER_CLICK=8000
 
 # Logging
 LOG_LEVEL=info

@@ -35,6 +35,8 @@ import {
   ActivationStrategy,
 } from '../cache/strategy-cache.interface.js';
 import { StrategyCacheFactory } from '../cache/strategy-cache.factory.js';
+import { AntiDevtoolResolverService } from './anti-devtool-resolver.service.js';
+import { AntiDevtoolDetector } from './detectors/anti-devtool-detector.js';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -59,19 +61,109 @@ export class ResolverService {
   private browserPool: BrowserPool;
   private strategyCache: IActivationStrategyCache;
   private config = getConfig();
+  private antiDevtoolResolver: AntiDevtoolResolverService;
+
+  // Dominios predeterminados que requieren protección anti-devtool
+  private static DEFAULT_ANTI_DEVTOOL_DOMAINS = [
+    'lamovie.link',
+    'vimeos.net',
+  ];
 
   constructor(browserPool: BrowserPool, strategyCache: IActivationStrategyCache) {
     this.browserPool = browserPool;
     this.strategyCache = strategyCache;
+    this.antiDevtoolResolver = new AntiDevtoolResolverService();
+  }
+
+  /**
+   * Obtiene la lista de dominios que requieren protección anti-devtool
+   */
+  private getAntiDevtoolDomains(): string[] {
+    if (!this.config.ANTI_DEVTOOL_ENABLED) {
+      return [];
+    }
+
+    // Si hay dominios configurados en env, usarlos
+    if (this.config.ANTI_DEVTOOL_DOMAINS) {
+      return this.config.ANTI_DEVTOOL_DOMAINS.split(',')
+        .map(d => d.trim())
+        .filter(Boolean);
+    }
+
+    // Usar lista predeterminada
+    return ResolverService.DEFAULT_ANTI_DEVTOOL_DOMAINS;
+  }
+
+  /**
+   * Detecta si una URL requiere protección anti-devtool.
+   * Usa detección inteligente automática si está habilitada.
+   */
+  private async requiresAntiDevtoolProtection(url: string): Promise<boolean> {
+    try {
+      if (!this.config.ANTI_DEVTOOL_ENABLED) {
+        return false;
+      }
+
+      const domains = this.getAntiDevtoolDomains();
+      
+      // Usar el detector inteligente con configuración de auto-detección
+      const detection = await AntiDevtoolDetector.detect(
+        url, 
+        domains, 
+        this.config.ANTI_DEVTOOL_AUTO_DETECT
+      );
+      
+      if (detection.hasAntiDevtool) {
+        getLogger().info(
+          {
+            url: sanitizeUrlForLogging(url),
+            method: detection.method,
+            confidence: detection.confidence,
+            patterns: detection.detectedPatterns,
+          },
+          '🔍 Anti-devtool protection detected',
+        );
+        
+        return AntiDevtoolDetector.isConfidentDetection(detection);
+      }
+
+      return false;
+    } catch (error) {
+      getLogger().warn(
+        { url: sanitizeUrlForLogging(url), error },
+        'Error detecting anti-devtool, assuming not required',
+      );
+      return false;
+    }
   }
 
   /**
    * Resuelve una URL para encontrar un manifiesto HLS, opcionalmente usando un proxy.
+   * Detecta automáticamente si el sitio requiere protección anti-devtool.
    * @param url La URL a resolver.
    * @param proxyUrl La URL del proxy a utilizar (opcional).
    * @returns Una promesa que se resuelve con la respuesta de la resolución.
    */
   public async resolve(url: string, proxyUrl?: string | null): Promise<ResolveHLSResponse> {
+    // Detectar si necesita protección anti-devtool (ahora asíncrono)
+    const requiresProtection = await this.requiresAntiDevtoolProtection(url);
+    
+    if (requiresProtection) {
+      getLogger().info(
+        { url: sanitizeUrlForLogging(url) },
+        '🛡️ Anti-devtool protection required for this URL',
+      );
+      
+      // Usar resolver especializado
+      return this.antiDevtoolResolver.resolve({
+        url,
+        timeoutMs: this.config.NAV_TIMEOUT_MS,
+        waitAfterClick: this.config.ANTI_DEVTOOL_WAIT_AFTER_CLICK,
+        clickRetries: 1,
+      });
+    }
+
+    // Usar resolver estándar
     const request: ResolveHLSRequest = {
       url,
       options: {
@@ -88,17 +180,10 @@ export class ResolverService {
    * @deprecated Utilizar resolve(url, proxyUrl) en su lugar. Esta función se eliminará en futuras versiones.
    */
   async resolveLegacy(request: ResolveRequest): Promise<ResolveResponse> {
-    const hlsRequest: ResolveHLSRequest = {
-      url: request.url,
-      options: {
-        timeoutMs: request.options?.maxWaitMs || 10000,
-        clickRetries: 1,
-        abortAfterFirst: true,
-        captureBodies: false,
-      },
-    };
-
-    const hlsResponse = await this.resolveHLS(hlsRequest);
+    // ⭐ NUEVA IMPLEMENTACIÓN: Usar resolve() con detección automática anti-devtool
+    // Esto garantiza que todos los endpoints usen la misma lógica
+    const hlsResponse = await this.resolve(request.url, null);
+    
     const timings = hlsResponse.timings;
     const clicksPerformed = hlsResponse.clicksPerformed;
     const targetsObserved = hlsResponse.targetsObserved;
@@ -115,7 +200,12 @@ export class ResolverService {
       })),
       {
         url: request.url,
-        options: { ...request.options, timeoutMs: 10000, clickRetries: 1, abortAfterFirst: true, captureBodies: false },
+        options: { 
+          timeoutMs: request.options?.maxWaitMs || 10000, 
+          clickRetries: 1, 
+          abortAfterFirst: true, 
+          captureBodies: false 
+        },
         sessionId: 'legacy',
         startTime: 0,
       },

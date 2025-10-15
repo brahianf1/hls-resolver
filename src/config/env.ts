@@ -33,6 +33,13 @@ const envSchema = z.object({
 
   // Pool settings
   BROWSER_POOL_SIZE: z.coerce.number().default(2),
+  MAX_CONCURRENT_PAGES: z.coerce.number().default(5),
+  
+  // Anti-Devtool Protection
+  ANTI_DEVTOOL_ENABLED: z.coerce.boolean().default(true),
+  ANTI_DEVTOOL_DOMAINS: z.string().optional(),
+  ANTI_DEVTOOL_WAIT_AFTER_CLICK: z.coerce.number().default(8000),
+  ANTI_DEVTOOL_AUTO_DETECT: z.coerce.boolean().default(true), // Detección inteligente automática
   
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().default(5),
