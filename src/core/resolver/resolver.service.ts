@@ -35,6 +35,7 @@ import {
   ActivationStrategy,
 } from '../cache/strategy-cache.interface.js';
 import { StrategyCacheFactory } from '../cache/strategy-cache.factory.js';
+import { AntiDevtoolResolverService } from './anti-devtool-resolver.service.js';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -59,19 +60,88 @@ export class ResolverService {
   private browserPool: BrowserPool;
   private strategyCache: IActivationStrategyCache;
   private config = getConfig();
+  private antiDevtoolResolver: AntiDevtoolResolverService;
+
+  // Dominios predeterminados que requieren protección anti-devtool
+  private static DEFAULT_ANTI_DEVTOOL_DOMAINS = [
+    'lamovie.link',
+    'voe.sx',
+    'streamtape.com',
+    'doodstream.com',
+  ];
 
   constructor(browserPool: BrowserPool, strategyCache: IActivationStrategyCache) {
     this.browserPool = browserPool;
     this.strategyCache = strategyCache;
+    this.antiDevtoolResolver = new AntiDevtoolResolverService();
+  }
+
+  /**
+   * Obtiene la lista de dominios que requieren protección anti-devtool
+   */
+  private getAntiDevtoolDomains(): string[] {
+    if (!this.config.ANTI_DEVTOOL_ENABLED) {
+      return [];
+    }
+
+    // Si hay dominios configurados en env, usarlos
+    if (this.config.ANTI_DEVTOOL_DOMAINS) {
+      return this.config.ANTI_DEVTOOL_DOMAINS.split(',')
+        .map(d => d.trim())
+        .filter(Boolean);
+    }
+
+    // Usar lista predeterminada
+    return ResolverService.DEFAULT_ANTI_DEVTOOL_DOMAINS;
+  }
+
+  /**
+   * Detecta si una URL requiere protección anti-devtool
+   */
+  private requiresAntiDevtoolProtection(url: string): boolean {
+    try {
+      if (!this.config.ANTI_DEVTOOL_ENABLED) {
+        return false;
+      }
+
+      const parsedUrl = new URL(url);
+      const hostname = parsedUrl.hostname.toLowerCase();
+      const domains = this.getAntiDevtoolDomains();
+      
+      // Verificar si el hostname está en la lista de dominios
+      return domains.some(domain => 
+        hostname.includes(domain.toLowerCase())
+      );
+    } catch (error) {
+      return false;
+    }
   }
 
   /**
    * Resuelve una URL para encontrar un manifiesto HLS, opcionalmente usando un proxy.
+   * Detecta automáticamente si el sitio requiere protección anti-devtool.
    * @param url La URL a resolver.
    * @param proxyUrl La URL del proxy a utilizar (opcional).
    * @returns Una promesa que se resuelve con la respuesta de la resolución.
    */
   public async resolve(url: string, proxyUrl?: string | null): Promise<ResolveHLSResponse> {
+    // Detectar si necesita protección anti-devtool
+    if (this.requiresAntiDevtoolProtection(url)) {
+      getLogger().info(
+        { url: sanitizeUrlForLogging(url) },
+        '🛡️ Anti-devtool protection required for this URL',
+      );
+      
+      // Usar resolver especializado
+      return this.antiDevtoolResolver.resolve({
+        url,
+        timeoutMs: this.config.NAV_TIMEOUT_MS,
+        waitAfterClick: this.config.ANTI_DEVTOOL_WAIT_AFTER_CLICK,
+        clickRetries: 1,
+      });
+    }
+
+    // Usar resolver estándar
     const request: ResolveHLSRequest = {
       url,
       options: {

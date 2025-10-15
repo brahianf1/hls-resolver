@@ -142,6 +142,98 @@ export async function resolveRoutes(
 });
 
 
+  // Endpoint de prueba específico para sitios con anti-devtool protection
+  app.post('/api/v1/resolve/protected', {
+    schema: {
+      description: 'Resuelve una URL de un sitio con bloqueador anti-devtool (testing endpoint)',
+      tags: ['resolver', 'anti-devtool'],
+      body: z.object({
+        url: z.string().url(),
+      }),
+      response: {
+        200: z.object({
+          sessionId: z.string(),
+          url: z.string(),
+          success: z.boolean(),
+          manifests: z.array(z.object({
+            url: z.string(),
+            status: z.number(),
+            contentType: z.string(),
+          })),
+          timings: z.object({
+            total: z.number(),
+            navigation: z.number(),
+            activation: z.number(),
+            detection: z.number(),
+          }),
+          clicksPerformed: z.number(),
+          antiDevtoolEnabled: z.boolean(),
+        }),
+        400: ErrorResponseZod,
+        500: ErrorResponseZod,
+      },
+    },
+    handler: async (request, reply) => {
+      const startTime = Date.now();
+      const requestId = request.id;
+      const { url } = request.body as { url: string };
+
+      try {
+        getLogger().info({
+          requestId,
+          url,
+          endpoint: '/api/v1/resolve/protected',
+        }, '🛡️ Protected resolve request started (anti-devtool mode)');
+
+        // Forzar uso del resolver anti-devtool sin depender de detección automática
+        const result = await resolverService.resolve(url);
+
+        const duration = Date.now() - startTime;
+        incrementHttpRequest(request.method, '/api/v1/resolve/protected', 200, duration);
+
+        getLogger().info({
+          requestId,
+          manifestsFound: result.manifests.length,
+          duration,
+        }, '🎉 Protected resolve request completed');
+
+        return reply.status(200).send({
+          sessionId: crypto.randomUUID(),
+          url,
+          success: result.manifests.length > 0,
+          manifests: result.manifests.map(m => ({
+            url: m.url,
+            status: m.status,
+            contentType: m.contentType,
+          })),
+          timings: result.timings,
+          clicksPerformed: result.clicksPerformed,
+          antiDevtoolEnabled: true,
+        });
+
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
+
+        incrementHttpRequest(request.method, '/api/v1/resolve/protected', 500, duration);
+
+        getLogger().error({
+          requestId,
+          url,
+          error: errorMessage,
+          duration,
+        }, '❌ Protected resolve request failed');
+
+        return reply.status(500).send({
+          error: 'Internal Server Error',
+          message: errorMessage,
+          statusCode: 500,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    },
+  });
+
   app.post('/api/v1/resolve', {
     schema: {
       description: 'Resuelve una URL para detectar streams HLS',
