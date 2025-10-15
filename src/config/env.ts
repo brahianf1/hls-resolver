@@ -39,6 +39,7 @@ const envSchema = z.object({
   ANTI_DEVTOOL_ENABLED: z.coerce.boolean().default(true),
   ANTI_DEVTOOL_DOMAINS: z.string().optional(),
   ANTI_DEVTOOL_WAIT_AFTER_CLICK: z.coerce.number().default(8000),
+  ANTI_DEVTOOL_AUTO_DETECT: z.coerce.boolean().default(true), // Detección inteligente automática
   
   // Worker
   WORKER_CONCURRENCY: z.coerce.number().default(5),

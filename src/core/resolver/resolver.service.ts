@@ -36,6 +36,7 @@ import {
 } from '../cache/strategy-cache.interface.js';
 import { StrategyCacheFactory } from '../cache/strategy-cache.factory.js';
 import { AntiDevtoolResolverService } from './anti-devtool-resolver.service.js';
+import { AntiDevtoolDetector } from './detectors/anti-devtool-detector.js';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
@@ -96,23 +97,44 @@ export class ResolverService {
   }
 
   /**
-   * Detecta si una URL requiere protección anti-devtool
+   * Detecta si una URL requiere protección anti-devtool.
+   * Usa detección inteligente automática si está habilitada.
    */
-  private requiresAntiDevtoolProtection(url: string): boolean {
+  private async requiresAntiDevtoolProtection(url: string): Promise<boolean> {
     try {
       if (!this.config.ANTI_DEVTOOL_ENABLED) {
         return false;
       }
 
-      const parsedUrl = new URL(url);
-      const hostname = parsedUrl.hostname.toLowerCase();
       const domains = this.getAntiDevtoolDomains();
       
-      // Verificar si el hostname está en la lista de dominios
-      return domains.some(domain => 
-        hostname.includes(domain.toLowerCase())
+      // Usar el detector inteligente con configuración de auto-detección
+      const detection = await AntiDevtoolDetector.detect(
+        url, 
+        domains, 
+        this.config.ANTI_DEVTOOL_AUTO_DETECT
       );
+      
+      if (detection.hasAntiDevtool) {
+        getLogger().info(
+          {
+            url: sanitizeUrlForLogging(url),
+            method: detection.method,
+            confidence: detection.confidence,
+            patterns: detection.detectedPatterns,
+          },
+          '🔍 Anti-devtool protection detected',
+        );
+        
+        return AntiDevtoolDetector.isConfidentDetection(detection);
+      }
+
+      return false;
     } catch (error) {
+      getLogger().warn(
+        { url: sanitizeUrlForLogging(url), error },
+        'Error detecting anti-devtool, assuming not required',
+      );
       return false;
     }
   }
@@ -125,8 +147,10 @@ export class ResolverService {
    * @returns Una promesa que se resuelve con la respuesta de la resolución.
    */
   public async resolve(url: string, proxyUrl?: string | null): Promise<ResolveHLSResponse> {
-    // Detectar si necesita protección anti-devtool
-    if (this.requiresAntiDevtoolProtection(url)) {
+    // Detectar si necesita protección anti-devtool (ahora asíncrono)
+    const requiresProtection = await this.requiresAntiDevtoolProtection(url);
+    
+    if (requiresProtection) {
       getLogger().info(
         { url: sanitizeUrlForLogging(url) },
         '🛡️ Anti-devtool protection required for this URL',
@@ -158,17 +182,10 @@ export class ResolverService {
    * @deprecated Utilizar resolve(url, proxyUrl) en su lugar. Esta función se eliminará en futuras versiones.
    */
   async resolveLegacy(request: ResolveRequest): Promise<ResolveResponse> {
-    const hlsRequest: ResolveHLSRequest = {
-      url: request.url,
-      options: {
-        timeoutMs: request.options?.maxWaitMs || 10000,
-        clickRetries: 1,
-        abortAfterFirst: true,
-        captureBodies: false,
-      },
-    };
-
-    const hlsResponse = await this.resolveHLS(hlsRequest);
+    // ⭐ NUEVA IMPLEMENTACIÓN: Usar resolve() con detección automática anti-devtool
+    // Esto garantiza que todos los endpoints usen la misma lógica
+    const hlsResponse = await this.resolve(request.url, null);
+    
     const timings = hlsResponse.timings;
     const clicksPerformed = hlsResponse.clicksPerformed;
     const targetsObserved = hlsResponse.targetsObserved;
@@ -185,7 +202,12 @@ export class ResolverService {
       })),
       {
         url: request.url,
-        options: { ...request.options, timeoutMs: 10000, clickRetries: 1, abortAfterFirst: true, captureBodies: false },
+        options: { 
+          timeoutMs: request.options?.maxWaitMs || 10000, 
+          clickRetries: 1, 
+          abortAfterFirst: true, 
+          captureBodies: false 
+        },
         sessionId: 'legacy',
         startTime: 0,
       },
