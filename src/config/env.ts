@@ -56,6 +56,9 @@ const envSchema = z.object({
   // Bull Board
   BULL_BOARD_USER: z.string().optional(),
   BULL_BOARD_PASSWORD: z.string().optional(),
+
+  // Bulk Processing
+  BULK_URL_LIMIT: z.coerce.number().default(500),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

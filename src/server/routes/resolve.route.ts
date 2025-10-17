@@ -14,6 +14,7 @@ import { ResolverService } from '../../core/resolver/resolver.service.js';
 import { getLogger } from '../../core/observability/logger.js';
 import { incrementHttpRequest } from '../../core/observability/metrics.js';
 import { QueueService } from '../../core/queue/queue.service.js';
+import { getConfig } from '../../config/env.js';
 
 const HLS_RESOLVER_JOB = 'hls-resolve-job';
 
@@ -24,12 +25,13 @@ export async function resolveRoutes(
 
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   const queueService = QueueService.getInstance();
+  const config = getConfig();
 
   app.post('/api/v1/resolve/bulk', {
     schema: {
       description: 'Inicia un proceso de resolución por lotes para una lista de URLs.',
       tags: ['resolver'],
-      body: BulkResolveRequestZod,
+      body: BulkResolveRequestZod(config.BULK_URL_LIMIT),
       response: {
         202: BulkResolveResponseZod,
         400: ErrorResponseZod,

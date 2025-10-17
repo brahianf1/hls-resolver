@@ -207,8 +207,8 @@ export type ResolveHLSResponse = z.infer<typeof ResolveHLSResponseZod>;
 export type Manifest = z.infer<typeof ManifestZod>;
 
 // --- Bulk Processing Schemas ---
-export const BulkResolveRequestZod = z.object({
-  urls: z.array(z.string().url()).min(1, "Debe proporcionar al menos una URL").max(500, "No se pueden procesar más de 500 URLs por lote"),
+export const BulkResolveRequestZod = (maxUrls: number) => z.object({
+  urls: z.array(z.string().url()).min(1, "Debe proporcionar al menos una URL").max(maxUrls, `No se pueden procesar más de ${maxUrls} URLs por lote`),
 });
 
 export const BulkResolveResponseZod = z.object({
@@ -232,7 +232,7 @@ export const BulkStatusResponseZod = z.object({
   })).optional(),
 });
 
-export type BulkResolveRequest = z.infer<typeof BulkResolveRequestZod>;
+export type BulkResolveRequest = z.infer<ReturnType<typeof BulkResolveRequestZod>>;
 export type BulkResolveResponse = z.infer<typeof BulkResolveResponseZod>;
 export type BulkStatusResponse = z.infer<typeof BulkStatusResponseZod>;
 

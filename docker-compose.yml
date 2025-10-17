@@ -47,6 +47,9 @@ services:
       
       # Session
       - SESSION_SECRET=${SESSION_SECRET:-default-secret-change-in-production}
+      
+      # Bulk Processing
+      - BULK_URL_LIMIT=${BULK_URL_LIMIT:-100}
     
     # Límites de recursos
     deploy:
@@ -113,6 +116,9 @@ services:
       
       # Logging
       - LOG_LEVEL=info
+
+      # Bulk Processing
+      - BULK_URL_LIMIT=${BULK_URL_LIMIT:-100}
     deploy:
       resources:
         limits:
